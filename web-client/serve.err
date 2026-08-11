@@ -1,0 +1,188 @@
+Listening on http://localhost:17170/
+TypeError: fetch failed
+    at mainFetch (ext:deno_fetch/26_fetch.js:2:3449)
+    at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+    at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+    at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12 {
+  [cause]: Error: error sending request for url (http://localhost:17172/ws/match/info?t=1785697230932): client error (Connect): tcp connect error: No connection could be made because the target machine actively refused it. (os error 10061)
+      at mainFetch (ext:deno_fetch/26_fetch.js:2:3477)
+      at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+      at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+      at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12
+}
+TypeError: fetch failed
+    at mainFetch (ext:deno_fetch/26_fetch.js:2:3449)
+    at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+    at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+    at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12 {
+  [cause]: Error: error sending request for url (http://localhost:17172/ws/match/info?t=1785697238931): client error (Connect): tcp connect error: No connection could be made because the target machine actively refused it. (os error 10061)
+      at mainFetch (ext:deno_fetch/26_fetch.js:2:3477)
+      at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+      at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+      at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12
+}
+TypeError: fetch failed
+    at mainFetch (ext:deno_fetch/26_fetch.js:2:3449)
+    at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+    at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+    at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12 {
+  [cause]: Error: error sending request for url (http://localhost:17172/ws/match/info?t=1785698406001): client error (Connect): tcp connect error: No connection could be made because the target machine actively refused it. (os error 10061)
+      at mainFetch (ext:deno_fetch/26_fetch.js:2:3477)
+      at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+      at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+      at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12
+}
+TypeError: fetch failed
+    at mainFetch (ext:deno_fetch/26_fetch.js:2:3449)
+    at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+    at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+    at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12 {
+  [cause]: Error: error sending request for url (http://localhost:17172/ws/match/info?t=1785698414004): client error (Connect): tcp connect error: No connection could be made because the target machine actively refused it. (os error 10061)
+      at mainFetch (ext:deno_fetch/26_fetch.js:2:3477)
+      at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+      at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+      at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12
+}
+TypeError: fetch failed
+    at mainFetch (ext:deno_fetch/26_fetch.js:2:3449)
+    at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+    at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+    at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12 {
+  [cause]: Error: error sending request for url (http://localhost:17172/ws/match/info?t=1785698422001): client error (Connect): tcp connect error: No connection could be made because the target machine actively refused it. (os error 10061)
+      at mainFetch (ext:deno_fetch/26_fetch.js:2:3477)
+      at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+      at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+      at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12
+}
+TypeError: fetch failed
+    at mainFetch (ext:deno_fetch/26_fetch.js:2:3449)
+    at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+    at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+    at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12 {
+  [cause]: Error: error sending request for url (http://localhost:17172/ws/match/info?t=1785698488004): client error (Connect): tcp connect error: No connection could be made because the target machine actively refused it. (os error 10061)
+      at mainFetch (ext:deno_fetch/26_fetch.js:2:3477)
+      at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+      at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+      at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12
+}
+TypeError: fetch failed
+    at mainFetch (ext:deno_fetch/26_fetch.js:2:3449)
+    at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+    at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+    at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12 {
+  [cause]: Error: error sending request for url (http://localhost:17172/ws/match/info?t=1785698997027): client error (Connect): tcp connect error: No connection could be made because the target machine actively refused it. (os error 10061)
+      at mainFetch (ext:deno_fetch/26_fetch.js:2:3477)
+      at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+      at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+      at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12
+}
+TypeError: fetch failed
+    at mainFetch (ext:deno_fetch/26_fetch.js:2:3449)
+    at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+    at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+    at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12 {
+  [cause]: Error: error sending request for url (http://localhost:17172/ws/match/info?t=1785699005027): client error (Connect): tcp connect error: No connection could be made because the target machine actively refused it. (os error 10061)
+      at mainFetch (ext:deno_fetch/26_fetch.js:2:3477)
+      at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+      at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+      at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12
+}
+TypeError: fetch failed
+    at mainFetch (ext:deno_fetch/26_fetch.js:2:3449)
+    at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+    at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+    at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12 {
+  [cause]: Error: error sending request for url (http://localhost:17172/ws/match/info?t=1785699104031): client error (Connect): tcp connect error: No connection could be made because the target machine actively refused it. (os error 10061)
+      at mainFetch (ext:deno_fetch/26_fetch.js:2:3477)
+      at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+      at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+      at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12
+}
+TypeError: fetch failed
+    at mainFetch (ext:deno_fetch/26_fetch.js:2:3449)
+    at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+    at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+    at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12 {
+  [cause]: Error: error sending request for url (http://localhost:17172/ws/match/info?t=1785699238041): client error (Connect): tcp connect error: No connection could be made because the target machine actively refused it. (os error 10061)
+      at mainFetch (ext:deno_fetch/26_fetch.js:2:3477)
+      at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+      at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+      at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12
+}
+TypeError: fetch failed
+    at mainFetch (ext:deno_fetch/26_fetch.js:2:3449)
+    at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+    at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+    at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12 {
+  [cause]: Error: error sending request for url (http://localhost:17172/ws/match/info?t=1785699422046): client error (Connect): tcp connect error: No connection could be made because the target machine actively refused it. (os error 10061)
+      at mainFetch (ext:deno_fetch/26_fetch.js:2:3477)
+      at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+      at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+      at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12
+}
+TypeError: fetch failed
+    at mainFetch (ext:deno_fetch/26_fetch.js:2:3449)
+    at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+    at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+    at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12 {
+  [cause]: Error: error sending request for url (http://localhost:17172/ws/match/info?t=1785699430045): client error (Connect): tcp connect error: No connection could be made because the target machine actively refused it. (os error 10061)
+      at mainFetch (ext:deno_fetch/26_fetch.js:2:3477)
+      at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+      at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+      at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12
+}
+TypeError: fetch failed
+    at mainFetch (ext:deno_fetch/26_fetch.js:2:3449)
+    at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+    at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+    at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12 {
+  [cause]: Error: error sending request for url (http://localhost:17172/ws/match/info?t=1785753543459): client error (Connect): tcp connect error: No connection could be made because the target machine actively refused it. (os error 10061)
+      at mainFetch (ext:deno_fetch/26_fetch.js:2:3477)
+      at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+      at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+      at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12
+}
+TypeError: fetch failed
+    at mainFetch (ext:deno_fetch/26_fetch.js:2:3449)
+    at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+    at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+    at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12 {
+  [cause]: Error: error sending request for url (http://localhost:17172/ws/match/info?t=1785753551468): client error (Connect): tcp connect error: No connection could be made because the target machine actively refused it. (os error 10061)
+      at mainFetch (ext:deno_fetch/26_fetch.js:2:3477)
+      at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+      at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+      at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12
+}
+TypeError: fetch failed
+    at mainFetch (ext:deno_fetch/26_fetch.js:2:3449)
+    at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+    at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+    at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12 {
+  [cause]: Error: error sending request for url (http://localhost:17172/ws/match/info?t=1785753559461): client error (Connect): tcp connect error: No connection could be made because the target machine actively refused it. (os error 10061)
+      at mainFetch (ext:deno_fetch/26_fetch.js:2:3477)
+      at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+      at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+      at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12
+}
+TypeError: fetch failed
+    at mainFetch (ext:deno_fetch/26_fetch.js:2:3449)
+    at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+    at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+    at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12 {
+  [cause]: Error: error sending request for url (http://localhost:17172/ws/match/info?t=1785753567461): client error (Connect): tcp connect error: No connection could be made because the target machine actively refused it. (os error 10061)
+      at mainFetch (ext:deno_fetch/26_fetch.js:2:3477)
+      at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+      at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+      at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12
+}
+TypeError: fetch failed
+    at mainFetch (ext:deno_fetch/26_fetch.js:2:3449)
+    at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+    at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+    at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12 {
+  [cause]: Error: error sending request for url (http://localhost:17172/ws/match/info?t=1785753575460): client error (Connect): tcp connect error: No connection could be made because the target machine actively refused it. (os error 10061)
+      at mainFetch (ext:deno_fetch/26_fetch.js:2:3477)
+      at async fetch (ext:deno_fetch/26_fetch.js:2:7433)
+      at async proxyHttp (file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:55:20)
+      at async file:///C:/Users/student/Desktop/thingamamagicthegathering/2026-08-02%20mtgoffline/web-client/serve.mjs:149:12
+}

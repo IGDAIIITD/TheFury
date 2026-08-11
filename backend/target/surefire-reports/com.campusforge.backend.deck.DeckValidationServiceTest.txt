@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: com.campusforge.backend.deck.DeckValidationServiceTest
+-------------------------------------------------------------------------------
+Tests run: 14, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.461 s -- in com.campusforge.backend.deck.DeckValidationServiceTest

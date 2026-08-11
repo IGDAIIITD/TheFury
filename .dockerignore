@@ -1,0 +1,60 @@
+# Build context for the backend + web images (repo root).
+# Only backend/target/*.jar, forge-engine/forge-gui/res and web-client sources
+# are needed; everything else is stripped out of the context tarball.
+
+.git
+**/.git
+**/node_modules
+**/dist
+**/coverage
+**/__pycache__
+*.log
+*.err
+
+# forge-engine is a full Forge fork; only the card data in forge-gui/res is
+# needed at runtime. Exclude every other module + its own .git.
+forge-engine/.git
+forge-engine/.github
+forge-engine/.mvn
+forge-engine/adventure-editor
+forge-engine/docs
+forge-engine/forge-ai
+forge-engine/forge-core
+forge-engine/forge-game
+forge-engine/forge-gui-android
+forge-engine/forge-gui-desktop
+forge-engine/forge-gui-ios
+forge-engine/forge-gui-mobile
+forge-engine/forge-gui-mobile-dev
+forge-engine/forge-gui/release-files
+forge-engine/forge-headless
+forge-engine/forge-installer
+forge-engine/forge-lda
+forge-engine/target
+forge-engine/checkstyle.xml
+forge-engine/*.md
+
+# Unrelated top-level trees / files (docker/ holds the Dockerfiles + nginx.conf,
+# so it stays in the context; docker/seeds + setup are runtime mounts only)
+admin-console
+BOOT-INF
+STEPS
+THEPLAN.md
+setup
+docker/seeds
+
+# Backend build output (the runnable jar IS copied below)
+backend/backend.log
+backend/backend.log.err
+backend/target/classes
+backend/target/test-classes
+backend/target/surefire-reports
+backend/target/maven-status
+
+# Web-client bits not needed by the image build
+web-client/scripts
+web-client/serve.mjs
+web-client/tsconfig.tsbuildinfo
+
+.idea
+*.iml

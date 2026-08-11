@@ -1,0 +1,8 @@
+package com.campusforge.backend.accounts;
+
+public class AccountBannedException extends RuntimeException {
+
+    public AccountBannedException(String message) {
+        super(message);
+    }
+}
