@@ -17,6 +17,8 @@ web-client/deno.log*
 # Runtime / generated
 backend/qr-catalog/
 /card-art/*.jpg
+/card-art/cards.csv
+/card-art/cards.json
 /card-art.7z
 
 # OS / editor
