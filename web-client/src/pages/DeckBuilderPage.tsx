@@ -11,6 +11,7 @@ import {
   validateDeck,
 } from '../api/endpoints'
 import { colorIdentityOf, colorSwatches, swatchBg } from '../lib/colors'
+import { CardArt } from '../lib/scryfall'
 import type { CardDto, CollectionEntryDto, DeckCardDto, DeckDto, DeckProblemDto } from '../api/types'
 
 interface LineItem {
@@ -124,8 +125,14 @@ export default function DeckBuilderPage() {
   const filtered = useMemo(() => {
     const q = search.toLowerCase()
     return cards.filter((card) => {
-      if (q && !card.forgeName.toLowerCase().includes(q)) return false
       const entry = ownedMap.get(card.id)
+      const owned = entry ? entry.quantity : 0
+      if (owned === 0) return false
+
+      const inDeck = lineMap.get(card.id)?.quantity ?? 0
+      if (owned !== 2147483647 && inDeck >= owned) return false
+
+      if (q && !card.forgeName.toLowerCase().includes(q)) return false
       const isFav = entry?.favorite ?? false
 
       if (catalogFilter === 'favorites' && !isFav) return false
@@ -148,7 +155,7 @@ export default function DeckBuilderPage() {
 
       return true
     })
-  }, [cards, ownedMap, search, catalogFilter, colors, curves, commanderEligibleOnly])
+  }, [cards, ownedMap, lineMap, search, catalogFilter, colors, curves, commanderEligibleOnly])
 
   const loadDeck = async (id: string) => {
     try {
@@ -393,6 +400,7 @@ export default function DeckBuilderPage() {
               const inDeck = lineMap.get(card.id)?.quantity ?? 0
               return (
                 <div key={card.id} className="card-tile" onClick={() => addCard(card)}>
+                  <CardArt name={card.forgeName} />
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <div className="name">
                       {card.manaValue !== null && card.manaValue > 0 && <span className="mana">{card.manaValue}</span>}{' '}

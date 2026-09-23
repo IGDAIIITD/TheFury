@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { browseCards, getCollection, toggleFavorite } from '../api/endpoints'
 import { colorIdentityOf, colorSwatches, swatchBg } from '../lib/colors'
+import { CardArt } from '../lib/scryfall'
 import { CACHE_KEYS, cacheGet, cacheSet } from '../lib/idb'
 import type { CardDto, CollectionEntryDto } from '../api/types'
 
@@ -274,6 +275,7 @@ export default function CollectionPage() {
             card.ownershipType === 'UNLIMITED' ? 'Unlimited' : owned ? `Owned: ${quantity}` : 'Missing'
           return (
             <div key={card.id} className={`card-tile ${owned ? '' : 'missing'}`}>
+              <CardArt name={card.forgeName} />
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div className="name">
                   {card.manaValue !== null && card.manaValue > 0 && (

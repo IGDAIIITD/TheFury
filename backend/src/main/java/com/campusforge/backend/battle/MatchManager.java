@@ -258,6 +258,24 @@ public class MatchManager implements BattleAdapter {
         rewardWinner(resolvedMatch[0], resolvedWinner[0]);
         ForgeMatchSession session = activeMatches.remove(matchId);
         if (session != null) {
+            // Push terminal state to both players BEFORE canceling so the
+            // remaining player sees "You Lose" instead of being stuck.
+            Match m = resolvedMatch[0];
+            String winnerName = null;
+            if (resolvedWinner[0] != null && m != null) {
+                Player winner = m.getPlayer1().getId().equals(resolvedWinner[0])
+                        ? m.getPlayer1() : m.getPlayer2();
+                if (winner != null) winnerName = winner.getDisplayName();
+            }
+            Map<String, Object> terminal = new java.util.LinkedHashMap<>();
+            terminal.put("gameOver", true);
+            terminal.put("status", "CONCEDED");
+            terminal.put("winnerId", resolvedWinner[0] != null ? resolvedWinner[0].toString() : null);
+            terminal.put("winnerName", winnerName);
+            terminal.put("winCondition", "Conceded");
+            terminal.put("matchId", matchId.toString());
+            messaging.convertAndSend("/topic/match/" + matchId + "/p0", terminal);
+            messaging.convertAndSend("/topic/match/" + matchId + "/p1", terminal);
             session.cancel();
         }
     }

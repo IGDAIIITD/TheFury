@@ -14,6 +14,7 @@ import com.campusforge.backend.events.EventService;
 import com.campusforge.backend.qr.dto.ClaimDto;
 import com.campusforge.backend.qr.dto.ClaimResultDto;
 import com.campusforge.backend.qr.dto.MintClaimRequest;
+import com.campusforge.backend.qr.dto.QrPrintEntry;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -158,6 +159,34 @@ public class ClaimService {
         return UUID.nameUUIDFromBytes((UNIQUE_NAMESPACE + token).getBytes(StandardCharsets.UTF_8));
     }
 
+    /**
+     * Generates a deterministic QR print catalog for every card in the catalog.
+     * Each card always maps to the same token core (derived from its ID), so
+     * re-running produces identical codes. New cards automatically get entries.
+     */
+    @Transactional
+    public List<QrPrintEntry> generatePrintCatalog() {
+        List<Card> cards = cardRepository.findAll();
+        List<QrPrintEntry> entries = new ArrayList<>(cards.size());
+        for (Card card : cards) {
+            String core = deterministicCore(card.getId());
+            Claim claim = claimRepository.findByTokenCore(core).orElse(null);
+            if (claim == null) {
+                String signedToken = qrCodeSigner.sign(core);
+                claim = claimRepository.save(new Claim(signedToken, core, card, null, null));
+            }
+            entries.add(new QrPrintEntry(
+                    card.getForgeName(),
+                    card.getOracleId(),
+                    core,
+                    claim.getToken(),
+                    card.getOwnershipType().name(),
+                    card.getRarity()));
+        }
+        entries.sort((a, b) -> a.cardName().compareToIgnoreCase(b.cardName()));
+        return entries;
+    }
+
     private String uniqueToken() {
         for (int attempt = 0; attempt < 10; attempt++) {
             StringBuilder sb = new StringBuilder(TOKEN_LENGTH);
@@ -170,5 +199,26 @@ public class ClaimService {
             }
         }
         throw new IllegalStateException("Could not allocate a unique claim token");
+    }
+
+    static String deterministicCore(UUID cardId) {
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] digest = md.digest(("cf-print:" + cardId).getBytes(StandardCharsets.UTF_8));
+            long v = ((long) (digest[0] & 0xFF) << 40)
+                    | ((long) (digest[1] & 0xFF) << 32)
+                    | ((long) (digest[2] & 0xFF) << 24)
+                    | ((long) (digest[3] & 0xFF) << 16)
+                    | ((long) (digest[4] & 0xFF) << 8)
+                    | (digest[5] & 0xFF);
+            StringBuilder sb = new StringBuilder(TOKEN_LENGTH);
+            for (int i = 0; i < TOKEN_LENGTH; i++) {
+                sb.append(TOKEN_ALPHABET.charAt((int) (v % TOKEN_ALPHABET.length())));
+                v /= TOKEN_ALPHABET.length();
+            }
+            return sb.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 not available", e);
+        }
     }
 }

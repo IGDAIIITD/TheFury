@@ -143,6 +143,9 @@ Deno.serve({ port: PORT, hostname: '0.0.0.0' }, async (req) => {
   if (urlPath.startsWith('/api')) {
     return await proxyHttp(req, urlPath + url.search)
   }
+  if (urlPath.startsWith('/card-art')) {
+    return await proxyHttp(req, urlPath + url.search)
+  }
   if (urlPath.startsWith('/ws')) {
     if (req.headers.get('upgrade')?.toLowerCase() === 'websocket') {
       return await proxyWebSocket(req, urlPath)

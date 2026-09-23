@@ -51,6 +51,10 @@ export default defineConfig({
         target: 'http://localhost:17172',
         changeOrigin: true,
       },
+      '/card-art': {
+        target: 'http://localhost:17172',
+        changeOrigin: true,
+      },
       '/ws': {
         target: 'http://localhost:17172',
         ws: true,

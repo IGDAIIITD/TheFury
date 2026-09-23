@@ -35,6 +35,8 @@ export interface MatchPlayerState {
   hand: CardEntry[]
   battlefield: CardEntry[]
   graveyard: CardEntry[]
+  /** Live mana pool keyed by W/U/B/R/G/C (public info). */
+  mana?: Record<string, number>
 }
 
 export interface StackItemState {

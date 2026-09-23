@@ -66,6 +66,14 @@ const cards: CardDto[] = [
 
 const collection: CollectionEntryDto[] = [
   {
+    cardId: '1',
+    forgeName: 'Island',
+    ownershipType: 'UNLIMITED',
+    quantity: 2147483647,
+    discoveredCount: 0,
+    favorite: false,
+  },
+  {
     cardId: '2',
     forgeName: 'Counterspell',
     ownershipType: 'UNLOCK',

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { CardArt } from '../lib/scryfall'
 import {
   acceptTrade,
   cancelTrade,
@@ -56,6 +57,7 @@ function SelectableCard({
       onClick={onToggle}
       style={{ cursor: 'pointer', borderColor: selected ? 'var(--good)' : undefined }}
     >
+      <CardArt name={card.forgeName} />
       <div className="name">{card.forgeName}</div>
       <div className="meta">
         {card.setCode ?? 'no set'} · serial #{card.serialNumber} · {card.rarity ?? ''}

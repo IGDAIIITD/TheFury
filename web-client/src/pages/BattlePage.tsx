@@ -15,31 +15,24 @@ import { useAuth } from '../auth/AuthContext'
 import type { MatchDto, MatchState, PendingChoice, MatchPlayerState } from '../api/battleTypes'
 import type { DeckDto } from '../api/types'
 import BattleCard from '../components/BattleCard'
+import {
+  friendlyPhase,
+  phaseStrip,
+  instructionFor,
+  matchOptionsToCards,
+  interactiveZones,
+  isImmediateChoice,
+  primaryActionLabel,
+  isInCombatPhase,
+  manaList,
+} from './battleUi'
+import type { BattleInstruction, MatchZone, OptionMatch } from './battleUi'
 
 interface GameEvent {
   id: number
   text: string
   kind: 'life' | 'zone' | 'phase' | 'turn' | 'system'
 }
-
-const PHASE_LABELS: Record<string, string> = {
-  UNTAP: 'Untap',
-  UPKEEP: 'Upkeep',
-  DRAW: 'Draw',
-  MAIN1: 'Main 1',
-  COMBAT_BEGIN: 'Beginning of Combat',
-  COMBAT_ATTACKERS_DECLARE_ATTACKERS: 'Declare Attackers',
-  COMBAT_BLOCKERS_DECLARE_BLOCKERS: 'Declare Blockers',
-  COMBAT_FIRST_STRIKE_DAMAGE: 'First-Strike Damage',
-  COMBAT_DAMAGE: 'Combat Damage',
-  COMBAT_END: 'End of Combat',
-  MAIN2: 'Main 2',
-  END: 'End Step',
-  CLEANUP: 'Cleanup',
-}
-
-const friendlyPhase = (p: string | null | undefined) =>
-  p ? (PHASE_LABELS[p] ?? p.replace(/_/g, ' ')) : '—'
 
 function LifePill({ delta }: { delta: number }) {
   const color = delta < 0 ? 'var(--bad)' : 'var(--good)'
@@ -59,6 +52,199 @@ function LifePill({ delta }: { delta: number }) {
   )
 }
 
+function HealthBar({ life, maxLife = 20 }: { life: number; maxLife?: number }) {
+  const pct = Math.max(0, Math.min(100, (life / maxLife) * 100))
+  const color = pct > 60 ? 'var(--good)' : pct > 30 ? '#f0ad4e' : 'var(--bad)'
+  return (
+    <div className="health-bar-vertical">
+      <span className="health-bar-number" style={{ color }}>{life}</span>
+      <div className="health-bar-track">
+        <div
+          className="health-bar-fill"
+          style={{ height: `${pct}%`, background: color }}
+        />
+      </div>
+      <span className="health-bar-label">HP</span>
+    </div>
+  )
+}
+
+function ManaBars({ pool }: { pool: Record<string, number> | null | undefined }) {
+  const pips = manaList(pool)
+  if (pool == null || pips.length === 0) return null
+  const maxCount = Math.max(...pips.map((p) => p.count), 1)
+  const colorMap: Record<string, string> = {
+    W: '#f9faf4',
+    U: '#0e68ab',
+    B: '#2b2a2e',
+    R: '#d3202a',
+    G: '#00733e',
+    C: '#9ca3af',
+  }
+  return (
+    <div className="mana-bars" aria-label="Mana pool">
+      {pips.map((p) => (
+        <div key={p.color} className="mana-bar-row">
+          <span className="mana-bar-icon" aria-hidden>{p.emoji}</span>
+          <div className="mana-bar-track">
+            <div
+              className="mana-bar-fill"
+              style={{
+                width: `${(p.count / maxCount) * 100}%`,
+                background: colorMap[p.color] ?? '#9ca3af',
+              }}
+            />
+          </div>
+          <span className="mana-bar-count">{p.count}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function eventColor(kind: GameEvent['kind']) {
+  switch (kind) {
+    case 'life':
+      return 'var(--bad)'
+    case 'phase':
+      return 'var(--accent)'
+    case 'turn':
+      return 'var(--good)'
+    default:
+      return 'var(--muted)'
+  }
+}
+
+function PhaseStrip({ phase }: { phase: string | null }) {
+  const steps = phaseStrip(phase)
+  return (
+    <div className="phase-strip" aria-label="Turn steps">
+      {steps.map((s) => (
+        <div
+          key={s.key}
+          className={`phase-step${s.active ? ' active' : ''}${s.inCombat && s.key === 'COMBAT_BEGIN' ? ' in-combat' : ''}`}
+        >
+          {s.label}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function InstructionBanner({ instruction }: { instruction: BattleInstruction }) {
+  return (
+    <div className={`instruction-banner ${instruction.tone}`}>
+      <div className="instruction-title">{instruction.title}</div>
+      {instruction.detail && <div className="instruction-detail">{instruction.detail}</div>}
+    </div>
+  )
+}
+
+function OpponentRow({
+  opponent,
+  lifeDelta,
+}: {
+  opponent: MatchPlayerState
+  lifeDelta?: number
+}) {
+  return (
+    <div className="panel opponent-row">
+      <div className="opponent-content">
+        <HealthBar life={opponent.life} />
+        <div className="opponent-info">
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+            <span className="opponent-name">{opponent.name}</span>
+            {lifeDelta !== undefined && <LifePill delta={lifeDelta} />}
+          </div>
+          <span className="opponent-meta">
+            Hand {opponent.handSize} · Library {opponent.librarySize} · Graveyard {opponent.graveyard?.length ?? 0}
+          </span>
+          <ManaBars pool={opponent.mana} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ActionBar({
+  choice,
+  textOptions,
+  hasCardOptions,
+  selected,
+  canConfirm,
+  onSend,
+}: {
+  choice: PendingChoice
+  textOptions: OptionMatch[]
+  hasCardOptions: boolean
+  selected: Set<number>
+  canConfirm: boolean
+  onSend: (indices: number[]) => void
+}) {
+  const immediate = isImmediateChoice(choice)
+  const primary = primaryActionLabel(choice)
+  const canSkip = choice.cancellable || choice.minCount === 0
+  const confirmRow = hasCardOptions && !!primary && !immediate && selected.size > 0
+  const showPass = hasCardOptions && choice.type === 'play' && canSkip
+  const showLoneSkip = canSkip && !confirmRow && !showPass && textOptions.length === 0
+
+  const hint =
+    choice.type === 'play'
+      ? 'Tap a card in your hand (or an ability on your board) to play it, or pass.'
+      : immediate
+        ? 'Tap a card to choose it.'
+        : selected.size === 0
+          ? 'Tap cards to select them.'
+          : `Tap the cards you want, then press ${primary}.`
+
+  const confirm = () => onSend(Array.from(selected).sort((a, b) => a - b))
+
+  return (
+    <div className="battle-actionbar">
+      {textOptions.length > 0 && (
+        <div className="battle-text-options">
+          {textOptions.map((m) => (
+            <button key={m.optionIndex} className="btn" onClick={() => onSend([m.optionIndex])}>
+              {m.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {confirmRow && (
+        <div className="battle-confirm-row">
+          <button className="btn primary" disabled={!canConfirm} onClick={confirm}>
+            {primary} ({selected.size}/{choice.maxCount})
+          </button>
+          {canSkip && (
+            <button className="btn" onClick={() => onSend([])}>
+              Skip
+            </button>
+          )}
+        </div>
+      )}
+
+      {showPass && (
+        <div className="battle-confirm-row">
+          <button className="btn" onClick={() => onSend([])}>
+            Pass Priority
+          </button>
+        </div>
+      )}
+
+      {showLoneSkip && (
+        <div className="battle-confirm-row">
+          <button className="btn" onClick={() => onSend([])}>
+            {choice.type === 'play' ? 'Pass' : 'Skip'}
+          </button>
+        </div>
+      )}
+
+      {(hasCardOptions || textOptions.length > 0) && <div className="battle-action-hint">{hint}</div>}
+    </div>
+  )
+}
+
 export default function BattlePage() {
   const { player, token } = useAuth()
   const [matches, setMatches] = useState<MatchDto[]>([])
@@ -74,6 +260,8 @@ export default function BattlePage() {
 
   const [events, setEvents] = useState<GameEvent[]>([])
   const [lifeDeltas, setLifeDeltas] = useState<Record<number, { delta: number }>>({})
+  const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [showArt, setShowArt] = useState(() => localStorage.getItem('cf_card_display') === 'art')
   const eventSeq = useRef(0)
   const prevStateRef = useRef<MatchState | null>(null)
   const resumingRef = useRef(false)
@@ -249,6 +437,29 @@ export default function BattlePage() {
     return () => clearTimeout(t)
   }, [lifeDeltas])
 
+  // Reset card selection whenever a new decision arrives.
+  const pendingRequestId = gameState?.pendingChoice?.requestId
+  useEffect(() => {
+    setSelected(new Set())
+  }, [pendingRequestId])
+
+  // Auto-skip when only mana-ability taps remain (auto-tap handles payment).
+  useEffect(() => {
+    if (!gameState?.pendingChoice || gameState.pendingChoice.type !== 'play') return
+    const choice = gameState.pendingChoice
+    const me = gameState.players?.find((p) => p.index === myIndex) ?? gameState.players?.[0]
+    const opponent = gameState.players?.find((p) => p.index !== myIndex) ?? gameState.players?.[1]
+    const mats = matchOptionsToCards(choice, {
+      hand: me?.hand ?? [],
+      battlefield: me?.battlefield ?? [],
+      opponent: opponent?.battlefield ?? [],
+    }, gameState.phase)
+    const nonMana = mats.filter((m) => m.zone !== 'none' && !m.manaAbility)
+    if (nonMana.length === 0) {
+      sendChoice(choice.requestId, [])
+    }
+  }, [gameState?.pendingChoice, gameState?.players, gameState?.phase, myIndex])
+
   const sendChoice = (requestId: number, indices: number[]) => {
     const client = clientRef.current
     if (!client || !activeMatch) return
@@ -380,32 +591,132 @@ export default function BattlePage() {
     const state = gameState!
     const me = state.players.find((p) => p.index === myIndex) ?? state.players[0]
     const opponent = state.players.find((p) => p.index !== myIndex) ?? state.players[1]
-    const activePlayer = state.players[state.activePlayerIndex]
+    const activePlayer = state.players[state.activePlayerIndex] ?? me
     const isMyTurn = me ? me.hasPriority : false
+    const instruction = instructionFor(state, me, opponent)
+    const choice = state.pendingChoice
+
+    const matches = choice
+      ? matchOptionsToCards(choice, {
+          hand: me?.hand ?? [],
+          battlefield: me?.battlefield ?? [],
+          opponent: opponent?.battlefield ?? [],
+        }, state.phase)
+      : []
+    const optionIndexByCard = new Map<string, number>()
+    for (const m of matches) {
+      for (const id of m.cardIds) {
+        const key = `${m.zone}:${id}`
+        if (!optionIndexByCard.has(key)) optionIndexByCard.set(key, m.optionIndex)
+      }
+    }
+    const optionFor = (zone: MatchZone, id: number) => optionIndexByCard.get(`${zone}:${id}`)
+    const zones = choice ? interactiveZones(choice) : []
+    const zoneActive = (z: MatchZone) => zones.includes(z)
+
+    const onTapCard = (zone: MatchZone, id: number) => {
+      if (!choice) return
+      const i = optionFor(zone, id)
+      if (i === undefined) return
+      if (isImmediateChoice(choice)) {
+        sendChoice(choice.requestId, [i])
+      } else {
+        setSelected((prev) => {
+          const n = new Set(prev)
+          if (n.has(i)) n.delete(i)
+          else n.add(i)
+          return n
+        })
+      }
+    }
+
+    const isCardSelected = (zone: MatchZone, id: number) => {
+      const i = optionFor(zone, id)
+      return i !== undefined && selected.has(i)
+    }
+
+    const renderTile = (zone: MatchZone, card: { id: number; name: string; type?: string | null; cost?: string | null; power?: number; toughness?: number; tapped?: boolean; attacking?: boolean; blocking?: boolean; damage?: number; text?: string | null }) => {
+      const optIdx = optionFor(zone, card.id)
+      const interactive = !!choice && zoneActive(zone) && optIdx !== undefined
+      const emphasis =
+        zone === 'battlefield' || zone === 'opponent'
+          ? card.attacking
+            ? 'attack'
+            : card.blocking
+              ? 'block'
+              : undefined
+          : undefined
+      return (
+        <BattleCard
+          key={card.id}
+          card={card}
+          selectable={interactive}
+          selected={isCardSelected(zone, card.id)}
+          disabled={!!choice && !interactive}
+          emphasis={emphasis}
+          showArt={showArt}
+          onClick={() => onTapCard(zone, card.id)}
+        />
+      )
+    }
+
+    const inCombat = isInCombatPhase(state.phase)
+    const allCards = [...(me?.hand ?? []), ...(me?.battlefield ?? [])]
+    const textOptions = matches.filter((m) => {
+      if (m.zone !== 'none') return false
+      if (!inCombat && m.cardIds.length > 0) {
+        const card = allCards.find((c) => m.cardIds.includes(c.id))
+        if (card?.type?.toLowerCase() === 'instant') return false
+      }
+      return true
+    })
+    const hasCardOptions = matches.some((m) => m.zone !== 'none')
+    const canConfirm = selected.size >= (choice?.minCount ?? 0)
+
     const iWon =
       state.winnerId != null ? state.winnerId === player?.id : state.winnerName === me?.name
 
     return (
       <div className="page">
-        <h2>Live Combat Board</h2>
-        <div className="filters">
-          <span className="chip active">Match: {activeMatch.id.slice(0, 8)}…</span>
-          <span className="chip">Turn {state.turn}</span>
-          <span className="chip">Phase: {friendlyPhase(state.phase)}</span>
-          <span className="chip" style={{ background: isMyTurn ? 'var(--good)' : 'var(--panel)', color: '#fff' }}>
-            {isMyTurn ? 'Your Priority' : `${activePlayer?.name ?? 'Opponent'}'s Turn`}
-          </span>
-          <span style={{ flex: 1 }} />
-          {over ? (
-            <button className="btn" onClick={backToLobby}>
-              Back to Lobby
-            </button>
-          ) : (
-            <button className="btn danger" onClick={handleConcede}>
-              Concede
-            </button>
-          )}
+        <div className="battle-topbar">
+          <h2 style={{ marginBottom: 4 }}>Live Combat</h2>
+          <div className="filters" style={{ flexWrap: 'wrap' }}>
+            <span className="chip">Turn {state.turn}</span>
+            <span className="chip">{friendlyPhase(state.phase)}</span>
+            <span
+              className="chip"
+              style={{
+                background: isMyTurn ? 'var(--good)' : 'var(--panel)',
+                color: isMyTurn ? '#fff' : 'var(--muted)',
+              }}
+            >
+              {isMyTurn ? 'Your priority' : `${activePlayer?.name ?? 'Opponent'}'s turn`}
+            </span>
+            <span
+              className="chip"
+              style={{ cursor: 'pointer' }}
+              onClick={() => {
+                const next = !showArt
+                setShowArt(next)
+                localStorage.setItem('cf_card_display', next ? 'art' : 'text')
+              }}
+            >
+              {showArt ? '🖼️ Art' : '📝 Text'}
+            </span>
+            <span style={{ flex: 1 }} />
+            {over ? (
+              <button className="btn" onClick={backToLobby}>
+                Back to Lobby
+              </button>
+            ) : (
+              <button className="btn danger" onClick={handleConcede}>
+                Concede
+              </button>
+            )}
+          </div>
         </div>
+
+        <PhaseStrip phase={state.phase} />
 
         {info && (
           <div className="problem good" style={{ marginBottom: 16 }}>
@@ -413,48 +724,90 @@ export default function BattlePage() {
           </div>
         )}
 
-        <PlayerPanel
-          playerState={opponent}
-          lifeDelta={lifeDeltas[opponent?.index ?? 1]?.delta}
-          align="opponent"
-        />
+        <InstructionBanner instruction={instruction} />
 
-        <div className="panel" style={{ marginBottom: 20, textAlign: 'center' }}>
-          <h3>Stack</h3>
-          {state.stack.length === 0 ? (
-            <div style={{ color: 'var(--muted)', padding: 12 }}>Stack is empty.</div>
-          ) : (
-            <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 10 }}>
-              {state.stack.map((item, i) => (
-                <div key={i} className="card-tile" style={{ textAlign: 'left', borderColor: 'var(--accent)', cursor: 'default' }}>
-                  <div className="name">{item.cardName ?? 'Ability'}</div>
-                  <div className="meta">Stack Item</div>
-                </div>
-              ))}
+        <OpponentRow opponent={opponent} lifeDelta={lifeDeltas[opponent?.index ?? 1]?.delta} />
+
+        <div className="panel battle-zone" id="opponent-battlefield">
+          <div className="battle-zone-head">
+            <h3>Your Opponent's Battlefield</h3>
+            <span className="chip">{opponent.battlefield.length} permanents</span>
+          </div>
+          {opponent.battlefield.length === 0 ? (
+            <div className="empty" style={{ padding: 10 }}>
+              Nothing on the battlefield yet.
             </div>
+          ) : (
+            <div className="battle-grid">{opponent.battlefield.map((c) => renderTile('opponent', c))}</div>
           )}
         </div>
 
-        <PlayerPanel
-          playerState={me}
-          lifeDelta={lifeDeltas[me?.index ?? 0]?.delta}
-          align="you"
-          revealHand
-        />
+        <div className="panel player-stats-panel">
+          <HealthBar life={me?.life ?? 0} />
+          <div className="player-stats-info">
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+              <span className="player-stats-name">{me?.name ?? 'You'}</span>
+              {lifeDeltas[me?.index ?? 0] && (
+                <LifePill delta={lifeDeltas[me!.index].delta} />
+              )}
+            </div>
+            <ManaBars pool={me?.mana} />
+          </div>
+        </div>
 
-        <div className="panel" style={{ marginBottom: 20 }}>
-          <h3>Game Log</h3>
-          <div
-            style={{
-              maxHeight: 180,
-              overflowY: 'auto',
-              fontSize: 13,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 4,
-              paddingRight: 6,
-            }}
-          >
+        <div className="panel battle-zone">
+          <div className="battle-zone-head">
+            <h3>Your Battlefield</h3>
+            <span className="chip">{me?.battlefield.length ?? 0} permanents</span>
+          </div>
+          {me && me.battlefield.length === 0 ? (
+            <div className="empty" style={{ padding: 10 }}>
+              Nothing on the battlefield yet.
+            </div>
+          ) : (
+            <div className="battle-grid">{me?.battlefield.map((c) => renderTile('battlefield', c))}</div>
+          )}
+        </div>
+
+        {state.stack.length > 0 && (
+          <div className="stack-line">
+            <span className="meta">Stack: </span>
+            {state.stack.map((s, i) => (
+              <span key={i} className="chip">
+                {s.cardName ?? 'Ability'}
+              </span>
+            ))}
+          </div>
+        )}
+
+        <div className="panel battle-zone">
+          <div className="battle-zone-head">
+            <h3>Your Hand</h3>
+            <span className="chip">{me?.hand.length ?? 0} cards</span>
+          </div>
+          {me && me.hand.length === 0 ? (
+            <div className="empty" style={{ padding: 10 }}>
+              Hand empty.
+            </div>
+          ) : (
+            <div className="battle-hand">{me?.hand.map((c) => renderTile('hand', c))}</div>
+          )}
+        </div>
+
+        {choice && !over && (
+          <ActionBar
+            choice={choice}
+            textOptions={textOptions}
+            hasCardOptions={hasCardOptions}
+            selected={selected}
+            canConfirm={canConfirm}
+            onSend={(indices) => sendChoice(choice.requestId, indices)}
+          />
+        )}
+
+        <details className="panel battle-log">
+          <summary>Game Log</summary>
+          <div className="battle-log-body">
             {events.length === 0 ? (
               <div style={{ color: 'var(--muted)', padding: 8 }}>The match has just begun.</div>
             ) : (
@@ -468,11 +821,7 @@ export default function BattlePage() {
               ))
             )}
           </div>
-        </div>
-
-        {state.pendingChoice && !over && (
-          <ChoicePanel choice={state.pendingChoice} onSend={sendChoice} />
-        )}
+        </details>
 
         {over && (
           <div
@@ -623,198 +972,6 @@ export default function BattlePage() {
           </div>
         ))}
       </div>
-    </div>
-  )
-}
-
-function eventColor(kind: GameEvent['kind']) {
-  switch (kind) {
-    case 'life':
-      return 'var(--bad)'
-    case 'phase':
-      return 'var(--accent)'
-    case 'turn':
-      return 'var(--good)'
-    default:
-      return 'var(--muted)'
-  }
-}
-
-function PlayerPanel({
-  playerState,
-  lifeDelta,
-  align,
-  revealHand = false,
-}: {
-  playerState: MatchPlayerState | undefined
-  lifeDelta?: number
-  align: 'you' | 'opponent'
-  revealHand?: boolean
-}) {
-  const name = playerState?.name ?? (align === 'you' ? 'You' : 'Opponent')
-  const life = playerState?.life ?? 0
-  const accent = align === 'you' ? 'rgba(61,220,151,0.08)' : 'rgba(255,93,115,0.08)'
-
-  return (
-    <div className="panel" style={{ marginBottom: 20, textAlign: 'center', background: accent }}>
-      <h3>{name}</h3>
-      <div style={{ fontSize: 36, fontWeight: 800, color: align === 'you' ? 'var(--good)' : 'var(--bad)' }}>
-        ❤️ {life} HP
-        {lifeDelta !== undefined && <LifePill delta={lifeDelta} />}
-      </div>
-      <div style={{ color: 'var(--muted)', marginTop: 6 }}>
-        Hand: {playerState?.handSize ?? 0} · Library: {playerState?.librarySize ?? 0} · Graveyard:{' '}
-        {playerState?.graveyard?.length ?? 0}
-      </div>
-
-      <div style={{ marginTop: 14 }}>
-        <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8, textAlign: 'left' }}>Battlefield:</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 10 }}>
-          {(playerState?.battlefield ?? []).map((card) => (
-            <BattleCard key={card.id} card={card} />
-          ))}
-          {(playerState?.battlefield ?? []).length === 0 && (
-            <div className="empty" style={{ padding: 10 }}>
-              Battlefield empty
-            </div>
-          )}
-        </div>
-      </div>
-
-      {revealHand && (
-        <div style={{ marginTop: 20 }}>
-          <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8, textAlign: 'left' }}>
-            Hand ({playerState?.handSize ?? 0}):
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 10 }}>
-            {(playerState?.hand ?? []).map((card) => (
-              <BattleCard key={card.id} card={card} />
-            ))}
-            {(playerState?.hand ?? []).length === 0 && (
-              <div className="empty" style={{ padding: 10 }}>
-                Hand empty
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {playerState && (playerState.graveyard?.length ?? 0) > 0 && (
-        <div style={{ marginTop: 16, textAlign: 'left' }}>
-          <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>Graveyard:</div>
-          <div
-            style={{
-              maxHeight: 90,
-              overflowY: 'auto',
-              fontSize: 12,
-              color: 'var(--muted)',
-              display: 'flex',
-              flexWrap: 'wrap',
-              gap: 4,
-            }}
-          >
-            {playerState.graveyard.map((c) => (
-              <span key={c.id} className="chip" style={{ fontSize: 11 }}>
-                {c.name}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function ChoicePanel({
-  choice,
-  onSend,
-}: {
-  choice: PendingChoice
-  onSend: (requestId: number, indices: number[]) => void
-}) {
-  const [selected, setSelected] = useState<Set<number>>(new Set())
-  const isSingle = choice.maxCount === 1
-
-  useEffect(() => {
-    setSelected(new Set())
-  }, [choice.requestId])
-
-  const toggle = (i: number) => {
-    if (isSingle) {
-      setSelected(new Set([i]))
-      return
-    }
-    setSelected((prev) => {
-      const next = new Set(prev)
-      if (next.has(i)) {
-        next.delete(i)
-      } else {
-        next.add(i)
-      }
-      return next
-    })
-  }
-
-  const submit = () => onSend(choice.requestId, Array.from(selected).sort((a, b) => a - b))
-  const canSubmit = selected.size >= choice.minCount
-
-  return (
-    <div className="panel" style={{ marginTop: 20, border: '1px solid var(--accent)' }}>
-      <h3 style={{ color: 'var(--accent)' }}>Your Decision</h3>
-      <div style={{ color: 'var(--muted)', marginBottom: 12 }}>{choice.prompt}</div>
-      {isSingle ? (
-        <div className="filters" style={{ flexWrap: 'wrap', justifyContent: 'center' }}>
-          {choice.options.map((opt, i) => (
-            <button key={i} className="btn" onClick={() => onSend(choice.requestId, [i])}>
-              {opt.label}
-            </button>
-          ))}
-        </div>
-      ) : (
-        <>
-          <div
-            style={{
-              display: 'flex',
-              flexWrap: 'wrap',
-              justifyContent: 'center',
-              gap: 8,
-              maxHeight: 260,
-              overflowY: 'auto',
-              marginBottom: 12,
-            }}
-          >
-            {choice.options.map((opt, i) => {
-              const active = selected.has(i)
-              return (
-                <span
-                  key={i}
-                  className={active ? 'chip active' : 'chip'}
-                  style={{ cursor: 'pointer', userSelect: 'none' }}
-                  onClick={() => toggle(i)}
-                >
-                  {active ? '✓ ' : ''}
-                  {opt.label}
-                </span>
-              )
-            })}
-          </div>
-          <div style={{ color: 'var(--muted)', fontSize: 12, marginBottom: 10, textAlign: 'center' }}>
-            {choice.minCount === 0
-              ? 'You may select zero or more, then confirm.'
-              : `Select at least ${choice.minCount}.`}
-          </div>
-          <div className="filters" style={{ justifyContent: 'center' }}>
-            <button className="btn" disabled={!canSubmit} onClick={submit}>
-              Confirm ({selected.size}/{choice.maxCount})
-            </button>
-            {choice.cancellable && (
-              <button className="btn" onClick={() => onSend(choice.requestId, [])}>
-                Skip
-              </button>
-            )}
-          </div>
-        </>
-      )}
     </div>
   )
 }
