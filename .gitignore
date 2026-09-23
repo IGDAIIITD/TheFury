@@ -1,5 +1,6 @@
 # Build artifacts
 backend/target/
+battle-engine/target/
 web-client/dist/
 web-client/node_modules/
 *.jar
