@@ -15,9 +15,8 @@ web-client/deno.log*
 
 # Runtime / generated
 backend/qr-catalog/
-qr-catalog/
-card-art/*.jpg
-card-art.7z
+/card-art/*.jpg
+/card-art.7z
 
 # OS / editor
 .DS_Store
