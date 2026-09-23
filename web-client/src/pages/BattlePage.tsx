@@ -10,6 +10,7 @@ import {
   concedeMatch,
   getMatchState,
 } from '../api/battleEndpoints'
+import { battleWsUrl, battleToken } from '../api/battleConfig'
 import { listDecks } from '../api/endpoints'
 import { useAuth } from '../auth/AuthContext'
 import type { MatchDto, MatchState, PendingChoice, MatchPlayerState } from '../api/battleTypes'
@@ -246,7 +247,7 @@ function ActionBar({
 }
 
 export default function BattlePage() {
-  const { player, token } = useAuth()
+  const { player } = useAuth()
   const [matches, setMatches] = useState<MatchDto[]>([])
   const [decks, setDecks] = useState<DeckDto[]>([])
   const [selectedDeckId, setSelectedDeckId] = useState('')
@@ -284,39 +285,48 @@ export default function BattlePage() {
 
   // WebSocket connection + catch-up fetch for reconnect
   useEffect(() => {
-    if (!activeMatch || !player || !token) return
+    if (!activeMatch || !player) return
+
+    let cancelled = false
+    let stompClient: Client | null = null
 
     getMatchState(activeMatch.id)
       .then(setGameState)
       .catch(() => {})
 
-    const socketUrl = `${window.location.protocol}//${window.location.host}/ws/match`
-    const client = new Client({
-      webSocketFactory: () => new SockJS(socketUrl),
-      connectHeaders: { Authorization: `Bearer ${token}` },
-      reconnectDelay: 5000,
-      onConnect: () => {
-        client.subscribe(`/topic/match/${activeMatch.id}/p${myIndex}`, (msg) => {
-          const parsed = JSON.parse(msg.body)
-          if (parsed.type === 'info') {
-            setInfo(parsed.message as string)
-            return
-          }
-          setGameState(parsed)
-          if (parsed.gameOver) {
-            listMatches().then(setMatches).catch(() => {})
-          }
-        })
-      },
+    battleToken().then((wsToken) => {
+      if (cancelled) return
+      if (!wsToken) return
+
+      const client = new Client({
+        webSocketFactory: () => new SockJS(battleWsUrl()),
+        connectHeaders: { Authorization: `Bearer ${wsToken}` },
+        reconnectDelay: 5000,
+        onConnect: () => {
+          client.subscribe(`/topic/match/${activeMatch.id}/p${myIndex}`, (msg) => {
+            const parsed = JSON.parse(msg.body)
+            if (parsed.type === 'info') {
+              setInfo(parsed.message as string)
+              return
+            }
+            setGameState(parsed)
+            if (parsed.gameOver) {
+              listMatches().then(setMatches).catch(() => {})
+            }
+          })
+        },
+      })
+      stompClient = client
+      clientRef.current = client
+      client.activate()
     })
-    clientRef.current = client
-    client.activate()
 
     return () => {
-      client.deactivate()
+      cancelled = true
+      stompClient?.deactivate()
       clientRef.current = null
     }
-  }, [activeMatch, player, token, myIndex])
+  }, [activeMatch, player, myIndex])
 
   // Reconnect-on-resume: a backgrounded/suspended tab can silently kill the
   // socket and pause JS timers, so on return we immediately re-establish the

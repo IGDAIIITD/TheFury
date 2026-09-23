@@ -1,36 +1,57 @@
-import api from './client'
+import axios from 'axios'
+import { battleRestBase, battleToken } from './battleConfig'
 import type { BattleFeatures, MatchDto, MatchState } from './battleTypes'
 
+const battleApi = axios.create({ baseURL: battleRestBase() })
+
+battleApi.interceptors.request.use(async (config) => {
+  const token = await battleToken()
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
+battleApi.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      console.error('401 Unauthorized encountered on battle engine:', error.config?.url)
+    }
+    return Promise.reject(error)
+  },
+)
+
 export async function listMatches(): Promise<MatchDto[]> {
-  const { data } = await api.get<MatchDto[]>('/battle/matches')
+  const { data } = await battleApi.get<MatchDto[]>('/battle/matches')
   return data
 }
 
 export async function createMatch(deckId: string, opponentPlayerId?: string, opponentDeckId?: string): Promise<MatchDto> {
-  const { data } = await api.post<MatchDto>('/battle/create', { deckId, opponentPlayerId, opponentDeckId })
+  const { data } = await battleApi.post<MatchDto>('/battle/create', { deckId, opponentPlayerId, opponentDeckId })
   return data
 }
 
 export async function createLobby(deckId: string): Promise<MatchDto> {
-  const { data } = await api.post<MatchDto>('/battle/lobby', { deckId })
+  const { data } = await battleApi.post<MatchDto>('/battle/lobby', { deckId })
   return data
 }
 
 export async function joinMatch(code: string, deckId: string): Promise<MatchDto> {
-  const { data } = await api.post<MatchDto>('/battle/join', { code, deckId })
+  const { data } = await battleApi.post<MatchDto>('/battle/join', { code, deckId })
   return data
 }
 
 export async function getBattleFeatures(): Promise<BattleFeatures> {
-  const { data } = await api.get<BattleFeatures>('/battle/features')
+  const { data } = await battleApi.get<BattleFeatures>('/battle/features')
   return data
 }
 
 export async function concedeMatch(matchId: string): Promise<void> {
-  await api.post(`/battle/matches/${matchId}/concede`)
+  await battleApi.post(`/battle/matches/${matchId}/concede`)
 }
 
 export async function getMatchState(matchId: string): Promise<MatchState> {
-  const { data } = await api.get<MatchState>(`/battle/matches/${matchId}/state`)
+  const { data } = await battleApi.get<MatchState>(`/battle/matches/${matchId}/state`)
   return data
 }

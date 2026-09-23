@@ -2,6 +2,7 @@ import { extname, join, normalize, resolve } from 'node:path'
 
 const PORT = Number(Deno.env.get('PORT') ?? 17170)
 const BACKEND = Deno.env.get('BACKEND') ?? 'http://localhost:17172'
+const ENGINE = Deno.env.get('ENGINE') ?? 'http://localhost:17175'
 const DIST = resolve('dist')
 
 const MIME = {
@@ -44,8 +45,8 @@ async function serveStatic(urlPath) {
   })
 }
 
-async function proxyHttp(req, urlPath) {
-  const backendUrl = BACKEND + urlPath
+async function proxyHttp(req, urlPath, upstreamBase = BACKEND) {
+  const backendUrl = upstreamBase + urlPath
   const headers = new Headers(req.headers)
   headers.delete('host')
   headers.delete('origin')
@@ -67,9 +68,9 @@ async function proxyHttp(req, urlPath) {
   })
 }
 
-async function proxyWebSocket(req, urlPath) {
+async function proxyWebSocket(req, urlPath, upstreamBase = BACKEND) {
   const { socket, response } = Deno.upgradeWebSocket(req)
-  const wsUrl = BACKEND.replace(/^http/, 'ws') + urlPath
+  const wsUrl = upstreamBase.replace(/^http/, 'ws') + urlPath
   const pending = []
   let open = false
   let upstream = null
@@ -140,6 +141,15 @@ Deno.serve({ port: PORT, hostname: '0.0.0.0' }, async (req) => {
   const url = new URL(req.url)
   const urlPath = url.pathname
 
+  if (urlPath.startsWith('/api/v1/battle') || urlPath.startsWith('/api/battle')) {
+    return await proxyHttp(req, urlPath + url.search, ENGINE)
+  }
+  if (urlPath.startsWith('/ws/match')) {
+    if (req.headers.get('upgrade')?.toLowerCase() === 'websocket') {
+      return await proxyWebSocket(req, urlPath, ENGINE)
+    }
+    return await proxyHttp(req, urlPath + url.search, ENGINE)
+  }
   if (urlPath.startsWith('/api')) {
     return await proxyHttp(req, urlPath + url.search)
   }
@@ -155,4 +165,6 @@ Deno.serve({ port: PORT, hostname: '0.0.0.0' }, async (req) => {
   return await serveStatic(urlPath)
 })
 
-console.log(`Campus Forge frontend serving ${DIST} on http://0.0.0.0:${PORT} (proxy -> ${BACKEND})`)
+console.log(
+  `Campus Forge frontend serving ${DIST} on http://0.0.0.0:${PORT} (backend -> ${BACKEND}, engine -> ${ENGINE})`,
+)

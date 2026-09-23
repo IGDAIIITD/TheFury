@@ -26,3 +26,9 @@ backend/qr-catalog/
 Thumbs.db
 .vscode/
 .idea/
+
+# Env overrides (never commit real Supabase keys / URLs)
+.env.local
+.env.*.local
+web-client/.env.local
+web-client/.env.production
