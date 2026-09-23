@@ -1,0 +1,26 @@
+# Build artifacts
+backend/target/
+web-client/dist/
+web-client/node_modules/
+*.jar
+*.class
+*.tsbuildinfo
+
+# Logs
+*.log
+*.log.err
+deno.log
+deno.log.err
+web-client/deno.log*
+
+# Runtime / generated
+backend/qr-catalog/
+qr-catalog/
+card-art/*.jpg
+card-art.7z
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
