@@ -32,7 +32,9 @@ and battle each other with real Magic rules.
   match result, starter grant and admin spawn (players read their own rows; admins all).
   `activity_feed` is the 50-row live ticker shown on the Events page.
 - **Realtime:** `activity_feed` and `trades` are published; RLS applies to subscribers.
-- **New accounts** get 5 red + 5 green creatures and a legal 60-card "Red-Green Starter" deck.
+- **Starter cards:** 5 red + 5 green attacking creatures are UNLIMITED like basic lands (everyone
+  owns infinite copies; Standard still allows 4 per deck), and every new account gets a
+  ready 60-card "Red-Green Starter" deck (4x each + 10 Mountain + 10 Forest).
 
 All writes that matter go through `SECURITY DEFINER` functions or Edge Functions;
 players can only edit their own presentation fields, decks and favorites directly.

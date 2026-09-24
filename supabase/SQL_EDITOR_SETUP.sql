@@ -3123,16 +3123,19 @@ alter default privileges revoke execute on functions from public;
 -- Campus Forge → Supabase
 -- Migration 14: starter pack so every account can battle on day one.
 --
+-- Starter creatures: 5 red + 5 green attacking creatures become UNLIMITED,
+-- exactly like basic lands: every player owns infinite copies and can build
+-- any deck with them (format rules still apply: max 4 copies per deck in
+-- STANDARD). Scanning their QR codes still counts as a discovery (no XP).
+--
 -- grant_starter_pack(player):
---   * unlocks 5 red + 5 green attacking creatures (UNLOCK cards, 1 copy each —
---     an unlock is one copy, same as a QR claim),
 --   * builds a legal 60-card STANDARD deck "Red-Green Starter":
---     the 10 creatures + 25 Mountain + 25 Forest (basics are UNLIMITED),
+--     4x each of the 10 creatures + 10 Mountain + 10 Forest,
 --   * logs a STARTER row in game_log, which is also the idempotency marker
 --     (a player who deletes the deck does not get a new one). If the catalog
 --     is not seeded yet nothing is marked, so re-running the backfill at the
 --     bottom of this file completes the grant.
--- No XP and no discoveries are granted, so scan-based achievements still
+-- No XP, unlocks or discoveries are granted, so scan-based achievements still
 -- have to be earned.
 --
 -- handle_new_user now also copies a *valid* cohort from signup metadata and
@@ -3140,6 +3143,15 @@ alter default privileges revoke execute on functions from public;
 -- blocks signup. Existing players are backfilled once at the end.
 --
 -- Idempotent.
+
+-- ---------------------------------------------------------------
+-- Starter creatures are UNLIMITED (seed.sql matches for fresh installs).
+-- ---------------------------------------------------------------
+update public.cards
+   set ownership_type = 'UNLIMITED'
+ where ownership_type <> 'UNLIMITED'
+   and forge_name in ('Raging Goblin', 'Goblin Piker', 'Vulshok Berserker', 'Hill Giant', 'Fire Elemental',
+                      'Grizzly Bears', 'Elvish Warrior', 'Trained Armodon', 'War Mammoth', 'Craw Wurm');
 
 create or replace function public.grant_starter_pack(p_player uuid)
 returns void
@@ -3166,12 +3178,7 @@ begin
 
     select array_agg(id) into v_ids
       from public.cards
-     where forge_name = any (v_names) and ownership_type = 'UNLOCK';
-
-    insert into public.player_unlocks (id, player_id, card_id, unlocked_at)
-    select gen_random_uuid(), p_player, c, now()
-      from unnest(coalesce(v_ids, '{}'::uuid[])) as c
-    on conflict on constraint uk_player_unlocks_player_card do nothing;
+     where forge_name = any (v_names) and ownership_type = 'UNLIMITED';
 
     select id into v_mountain from public.cards where forge_name = 'Mountain' and ownership_type = 'UNLIMITED' limit 1;
     select id into v_forest   from public.cards where forge_name = 'Forest'   and ownership_type = 'UNLIMITED' limit 1;
@@ -3184,11 +3191,11 @@ begin
         values (v_deck, p_player, 'Red-Green Starter', 'STANDARD');
 
         insert into public.deck_cards (id, deck_id, card_id, quantity)
-        select gen_random_uuid(), v_deck, c, 1 from unnest(v_ids) as c
+        select gen_random_uuid(), v_deck, c, 4 from unnest(v_ids) as c
         union all
-        select gen_random_uuid(), v_deck, v_mountain, 25
+        select gen_random_uuid(), v_deck, v_mountain, 10
         union all
-        select gen_random_uuid(), v_deck, v_forest, 25;
+        select gen_random_uuid(), v_deck, v_forest, 10;
     end if;
 
     -- no marker unless the full pack landed, so a later backfill can finish the job
@@ -3265,21 +3272,21 @@ select public.grant_starter_pack(p.id) from public.profiles p;
 -- Card catalog (StarterCardSeeder first-15 + CardCatalogSeeder 80)
 -- ---------------------------------------------------------------
 insert into public.cards (id, oracle_id, forge_name, rarity, ownership_type, set_code, mana_value, types, colors, image_url, discoverable, spawn_region, weight, commander_eligible) values
-    ('11111111-1111-4111-8111-111111111101', '11111111-1111-4111-8111-111111111101', 'Grizzly Bears', 'Common', 'UNLOCK', 'M19', 2, 'Creature — Bear', 'G', null, true, 'Engineering', 5.0, false),
-    ('11111111-1111-4111-8111-111111111102', '11111111-1111-4111-8111-111111111102', 'Elvish Warrior', 'Common', 'UNLOCK', 'M19', 2, 'Creature — Elf Warrior', 'G', null, true, 'Engineering', 5.0, false),
+    ('11111111-1111-4111-8111-111111111101', '11111111-1111-4111-8111-111111111101', 'Grizzly Bears', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Bear', 'G', null, true, 'Engineering', 5.0, false),
+    ('11111111-1111-4111-8111-111111111102', '11111111-1111-4111-8111-111111111102', 'Elvish Warrior', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Elf Warrior', 'G', null, true, 'Engineering', 5.0, false),
     ('11111111-1111-4111-8111-111111111103', '11111111-1111-4111-8111-111111111103', 'Elvish Archers', 'Common', 'UNLOCK', 'M19', 2, 'Creature — Elf Archer', 'G', null, true, 'Engineering', 5.0, false),
-    ('11111111-1111-4111-8111-111111111104', '11111111-1111-4111-8111-111111111104', 'Trained Armodon', 'Common', 'UNLOCK', 'M19', 3, 'Creature — Elephant', 'G', null, true, 'Library', 5.0, false),
+    ('11111111-1111-4111-8111-111111111104', '11111111-1111-4111-8111-111111111104', 'Trained Armodon', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Elephant', 'G', null, true, 'Library', 5.0, false),
     ('11111111-1111-4111-8111-111111111105', '11111111-1111-4111-8111-111111111105', 'Cudgel Troll', 'Common', 'UNLOCK', 'M19', 4, 'Creature — Troll', 'G', null, true, 'Library', 5.0, false),
     ('11111111-1111-4111-8111-111111111106', '11111111-1111-4111-8111-111111111106', 'Giant Spider', 'Common', 'UNLOCK', 'M19', 4, 'Creature — Spider', 'G', null, true, 'Library', 5.0, false),
-    ('11111111-1111-4111-8111-111111111107', '11111111-1111-4111-8111-111111111107', 'War Mammoth', 'Common', 'UNLOCK', 'M19', 4, 'Creature — Elephant', 'G', null, true, 'Library', 5.0, false),
-    ('11111111-1111-4111-8111-111111111108', '11111111-1111-4111-8111-111111111108', 'Craw Wurm', 'Common', 'UNLOCK', 'M19', 6, 'Creature — Wurm', 'G', null, true, 'Library', 5.0, false),
-    ('11111111-1111-4111-8111-111111111109', '11111111-1111-4111-8111-111111111109', 'Raging Goblin', 'Common', 'UNLOCK', 'M19', 1, 'Creature — Goblin Berserker', 'R', null, true, 'Gym', 5.0, false),
-    ('11111111-1111-4111-8111-11111111110a', '11111111-1111-4111-8111-11111111110a', 'Goblin Piker', 'Common', 'UNLOCK', 'M19', 2, 'Creature — Goblin Warrior', 'R', null, true, 'Gym', 5.0, false),
+    ('11111111-1111-4111-8111-111111111107', '11111111-1111-4111-8111-111111111107', 'War Mammoth', 'Common', 'UNLIMITED', 'M19', 4, 'Creature — Elephant', 'G', null, true, 'Library', 5.0, false),
+    ('11111111-1111-4111-8111-111111111108', '11111111-1111-4111-8111-111111111108', 'Craw Wurm', 'Common', 'UNLIMITED', 'M19', 6, 'Creature — Wurm', 'G', null, true, 'Library', 5.0, false),
+    ('11111111-1111-4111-8111-111111111109', '11111111-1111-4111-8111-111111111109', 'Raging Goblin', 'Common', 'UNLIMITED', 'M19', 1, 'Creature — Goblin Berserker', 'R', null, true, 'Gym', 5.0, false),
+    ('11111111-1111-4111-8111-11111111110a', '11111111-1111-4111-8111-11111111110a', 'Goblin Piker', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Goblin Warrior', 'R', null, true, 'Gym', 5.0, false),
     ('11111111-1111-4111-8111-11111111110b', '11111111-1111-4111-8111-11111111110b', 'Goblin Mountaineer', 'Common', 'UNLOCK', 'M19', 2, 'Creature — Goblin Scout', 'R', null, true, 'Gym', 5.0, false),
     ('11111111-1111-4111-8111-11111111110c', '11111111-1111-4111-8111-11111111110c', 'Goblin Hero', 'Common', 'UNLOCK', 'M19', 3, 'Creature — Goblin', 'R', null, true, 'Gym', 5.0, false),
-    ('11111111-1111-4111-8111-11111111110d', '11111111-1111-4111-8111-11111111110d', 'Vulshok Berserker', 'Common', 'UNLOCK', 'M19', 3, 'Creature — Human Berserker', 'R', null, true, 'Gym', 5.0, false),
-    ('11111111-1111-4111-8111-11111111110e', '11111111-1111-4111-8111-11111111110e', 'Hill Giant', 'Common', 'UNLOCK', 'M19', 4, 'Creature — Giant', 'R', null, true, 'Gym', 5.0, false),
-    ('11111111-1111-4111-8111-11111111110f', '11111111-1111-4111-8111-11111111110f', 'Fire Elemental', 'Common', 'UNLOCK', 'M19', 5, 'Creature — Elemental', 'R', null, true, 'Gym', 5.0, false),
+    ('11111111-1111-4111-8111-11111111110d', '11111111-1111-4111-8111-11111111110d', 'Vulshok Berserker', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Human Berserker', 'R', null, true, 'Gym', 5.0, false),
+    ('11111111-1111-4111-8111-11111111110e', '11111111-1111-4111-8111-11111111110e', 'Hill Giant', 'Common', 'UNLIMITED', 'M19', 4, 'Creature — Giant', 'R', null, true, 'Gym', 5.0, false),
+    ('11111111-1111-4111-8111-11111111110f', '11111111-1111-4111-8111-11111111110f', 'Fire Elemental', 'Common', 'UNLIMITED', 'M19', 5, 'Creature — Elemental', 'R', null, true, 'Gym', 5.0, false),
 
     ('0d49a960-963a-46a4-8d3d-b3f7b0d7b3c4', '0d49a960-963a-46a4-8d3d-b3f7b0d7b3c4', 'Plains', 'Common', 'UNLIMITED', 'M19', 0, 'Basic Land — Plains', 'W', null, true, 'Library', 10.0, false),
     ('6d2ecbb5-5d0e-4bb4-8e8f-1f3a0c3e8b2a', '6d2ecbb5-5d0e-4bb4-8e8f-1f3a0c3e8b2a', 'Island', 'Common', 'UNLIMITED', 'M19', 0, 'Basic Land — Island', 'U', null, true, 'Library', 10.0, false),
