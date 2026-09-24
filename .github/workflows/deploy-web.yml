@@ -36,9 +36,11 @@ jobs:
       - name: Build (GitHub Pages base path)
         env:
           BASE_PATH: /${{ github.event.repository.name }}/
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-          VITE_BATTLE_ENGINE_URL: ${{ secrets.VITE_BATTLE_ENGINE_URL }}
+          # Public by design (ship in the JS bundle); RLS is the security boundary.
+          VITE_SUPABASE_URL: https://prjsiywvhxqnsvsmfgxm.supabase.co
+          VITE_SUPABASE_ANON_KEY: sb_publishable_CI-gegnlyhVoOfHr-1SEmw__J_BDZZ6
+          # Empty = no battle engine; the Battle tab/route is hidden.
+          VITE_BATTLE_ENGINE_URL: ''
         run: npm run build
 
       # GitHub Pages serves 404.html for unknown deep links; reusing the SPA

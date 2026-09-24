@@ -28,6 +28,9 @@ Thumbs.db
 .idea/
 
 # Env overrides (never commit real Supabase keys / URLs)
+.env
+**/.env
+supabase/.env
 .env.local
 .env.*.local
 web-client/.env.local
