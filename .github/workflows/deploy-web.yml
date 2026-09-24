@@ -39,7 +39,8 @@ jobs:
           # Public by design (ship in the JS bundle); RLS is the security boundary.
           VITE_SUPABASE_URL: https://prjsiywvhxqnsvsmfgxm.supabase.co
           VITE_SUPABASE_ANON_KEY: sb_publishable_CI-gegnlyhVoOfHr-1SEmw__J_BDZZ6
-          # Empty = no battle engine; the Battle tab/route is hidden.
+          # Empty = no battle engine; the Battle tab/route is hidden. To enable battles set
+          # the tunnel hostname, e.g. 'https://battle.<your-domain>' (battle-engine/README.md step 6).
           VITE_BATTLE_ENGINE_URL: ''
         run: npm run build
 
