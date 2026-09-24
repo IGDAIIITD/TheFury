@@ -199,11 +199,37 @@ console.log('\n# imported set: M19 (seed_sets/m19.sql)')
   const serial = await q(`select owner_id, serial_number from public.unique_cards where card_id = $1`, [bolasId])
   check('exactly one owner, serial 1', serial.length === 1 && serial[0].owner_id === alice && serial[0].serial_number === 1, JSON.stringify(serial))
 
-  // UNLIMITED commons are deck-ready for everyone: 4 copies without scanning anything
-  r = await as(db, 'authenticated', bob, `select public.validate_deck_spec('STANDARD', null, jsonb_build_array(
+  // UNLIMITED commons outside the base 15 are locked until scanned once, then unlimited
+  const locked = await q(`select count(*) filter (where requires_unlock)::int as locked,
+                                 count(*) filter (where ownership_type = 'UNLIMITED' and not requires_unlock)::int as free
+                            from public.cards`)
+  check('104 imported commons are scan-to-unlock; only the base 15 UNLIMITED cards are free',
+    locked[0].locked === 104 && locked[0].free === 15, JSON.stringify(locked))
+  const dave = await signUp(db, 'dave@campus.edu', { display_name: 'Dave' })
+  const archerDeck = () => as(db, 'authenticated', dave, `select public.validate_deck_spec('STANDARD', null, jsonb_build_array(
       jsonb_build_object('cardId', (select id from public.cards where forge_name = 'Skeleton Archer'), 'quantity', 4),
       jsonb_build_object('cardId', (select id from public.cards where forge_name = 'Swamp'), 'quantity', 56))) as v`)
-  check('4x an M19 common is legal without owning a scan', r.ok && r.rows[0].v.valid === true, JSON.stringify(r.rows?.[0]?.v ?? r.error))
+  r = await archerDeck()
+  check('before scanning, an imported common is not owned', r.ok && r.rows[0].v.problems.some((p) => p.code === 'NOT_OWNED'),
+    JSON.stringify(r.rows?.[0]?.v ?? r.error))
+  const archer = (await q(`select id from public.cards where forge_name = 'Skeleton Archer'`))[0].id
+  await q(`select public.ensure_print_claim($1, 'ARCHERCODE01', 'V1.ARCHERCODE01.SIG')`, [archer])
+  await q(`select public.ensure_print_claim($1, 'ARCHERCODE02', 'V1.ARCHERCODE02.SIG')`, [archer])
+  r = await as(db, 'service_role', null, `select public.apply_claim('ARCHERCODE01', $1) as res`, [dave])
+  check('first scan unlocks it (+10 XP)', r.ok && r.rows[0].res.unlocked === true && r.rows[0].res.experienceAwarded === 10,
+    JSON.stringify(r.rows?.[0]?.res ?? r.error))
+  r = await archerDeck()
+  check('…and one scan gives unlimited copies (4x legal)', r.ok && r.rows[0].v.valid === true, JSON.stringify(r.rows?.[0]?.v ?? r.error))
+  r = await as(db, 'service_role', null, `select public.apply_claim('ARCHERCODE02', $1) as res`, [dave])
+  check('further scans (any code) are discovery-only (UNLIMITED)',
+    r.ok && r.rows[0].res.unlocked === false && r.rows[0].res.reason === 'UNLIMITED' && r.rows[0].res.experienceAwarded === 0,
+    JSON.stringify(r.rows?.[0]?.res ?? r.error))
+  const stats = (await as(db, 'authenticated', dave, `select public.my_profile_stats() as s`)).rows[0].s
+  check('collection % counts only free + unlocked cards (15 base + 1 unlocked)', stats.ownedCards === 16 && stats.totalCards === 357,
+    JSON.stringify([stats.ownedCards, stats.totalCards]))
+  check('a new player no longer gets Collector I for free', !stats.badges.some((b) => b.code === 'COLLECTOR_I'), JSON.stringify(stats.badges))
+  r = await as(db, 'service_role', null, `select public.validate_deck(id) as p from public.decks where player_id = $1 and name = 'Red-Green Starter'`, [dave])
+  check('the starter deck (base 15 only) still passes battle validation', r.ok && r.rows.every((x) => x.p === null) , JSON.stringify(r.rows ?? r.error))
 }
 
 console.log('\n# multi-copy unlocks: 4 different codes = 4 copies')

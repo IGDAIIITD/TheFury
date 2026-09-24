@@ -34,6 +34,8 @@ export interface CardDto {
   spawnRegion: string | null
   weight: number | null
   commanderEligible: boolean
+  /** UNLIMITED cards that stay locked until the player scans them once (all but the base 15). */
+  requiresUnlock?: boolean
 }
 
 export interface CollectionEntryDto {

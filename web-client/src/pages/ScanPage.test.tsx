@@ -145,3 +145,16 @@ test('says when all copies are collected', async () => {
 
   expect(await screen.findByText('You have all 4 copies of Counterspell.')).toBeInTheDocument()
 })
+
+test('unlocking a scan-once common says it gives unlimited copies', async () => {
+  mockedClaimToken.mockResolvedValue({
+    ...unlockedResult,
+    card: { ...unlockedResult.card, forgeName: 'Skeleton Archer', ownershipType: 'UNLIMITED', requiresUnlock: true },
+  })
+
+  render(<ScanPage />)
+  fireEvent.change(screen.getByTestId('manual-token'), { target: { value: 'ARCHERCODE01' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Claim' }))
+
+  expect(await screen.findByText('+10 XP · unlimited copies · discovery #1')).toBeInTheDocument()
+})

@@ -61,6 +61,7 @@ interface CardRow {
   spawn_region: string | null
   weight: number | null
   commander_eligible: boolean
+  requires_unlock?: boolean
 }
 
 function toCard(r: CardRow): CardDto {
@@ -79,6 +80,7 @@ function toCard(r: CardRow): CardDto {
     spawnRegion: r.spawn_region,
     weight: r.weight,
     commanderEligible: r.commander_eligible,
+    requiresUnlock: r.requires_unlock ?? false,
   }
 }
 
@@ -129,7 +131,10 @@ export async function getCollection(): Promise<CollectionEntryDto[]> {
   const entries: CollectionEntryDto[] = []
   for (const card of cardsRes.data as CardRow[]) {
     let quantity = 0
-    if (card.ownership_type === 'UNLIMITED') quantity = UNLIMITED_QUANTITY
+    // UNLIMITED: free (base 15), or unlocked by one scan (an unlock row) → unlimited copies
+    if (card.ownership_type === 'UNLIMITED') {
+      quantity = !card.requires_unlock || unlockCounts.has(card.id) ? UNLIMITED_QUANTITY : 0
+    }
     else if (card.ownership_type === 'UNLOCK') quantity = unlockCounts.get(card.id) ?? 0
     else quantity = uniqueCounts.get(card.id) ?? 0
     if (quantity > 0) {

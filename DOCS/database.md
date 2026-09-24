@@ -17,9 +17,9 @@ rest is callable only by the service role (Edge Functions, battle engine). See [
 | Table | Purpose | Players can | Written by |
 | --- | --- | --- | --- |
 | `profiles` | 1:1 with `auth.users`: display name, email, cohort, role, XP, level, ban | read & update **own** presentation fields* | signup trigger, game functions, admins |
-| `cards` | card catalog (name, rarity, ownership type, set, colors, types, …): `seed.sql` + `seed_sets/*.sql` | read (anyone) | admins / seed files |
+| `cards` | card catalog (name, rarity, ownership type, `requires_unlock`, set, colors, types, …): `seed.sql` + `seed_sets/*.sql` | read (anyone) | admins / seed files |
 | `formats`, `card_legalities` | STANDARD / COMMANDER rules; per-card legality | read (anyone) | admins / seed |
-| `player_unlocks` | copies of UNLOCK cards a player owns: one row per copy, `claim_id` = the code that granted it (unique per player × code; at most 4 per card, enforced in `apply_claim`) | read own | `apply_claim` |
+| `player_unlocks` | copies of UNLOCK cards a player owns (one row per copy, at most 4 per card) and unlocked scan-once UNLIMITED cards (one row = unlimited). `claim_id` = the code that granted it (unique per player × code) | read own | `apply_claim` |
 | `unique_cards` | serialized UNIQUE copies (`serial_number`, `history`, owner) | read own (+ cards in their pending trades) | `apply_claim`, `accept_trade`, admins |
 | `discoveries` | scan counts per player × card | read own | `apply_claim` |
 | `favorites` | favorited cards | read/insert/delete own | player |
@@ -71,6 +71,7 @@ RLS policies and check constraints use them.
 | `record_match_result(match, winner, condition)` | battle engine | finish a match (idempotent), XP × bonus, feed, `game_log` rows |
 | `validate_deck(deck, event)` | battle engine | match-time deck check (ownership, copies, bans, size, event sets) |
 | `grant_starter_pack(player)` | signup trigger | build the starter deck once |
+| `owned_copies(player, card)` | internal | **the ownership rule**, used by `apply_claim` and both deck validators: UNLIMITED → unlimited if free or unlocked (else 0); UNLOCK → copies (rows); UNIQUE → serials owned |
 | `add_feed_entry(...)`, `sweep_achievements(player)`, `card_print_core(card)`, `unique_physical_uuid(core)`, `assert_active_player(player)` | internal | helpers |
 
 Errors raised by game functions use SQLSTATE `CF` + HTTP status, e.g. `CF404`, `CF409` or `CF410`. The app and
@@ -115,6 +116,7 @@ service role (`scripts/download-card-art.ps1`).
 | 14 | `starter_pack` | UNLIMITED starter creatures, `grant_starter_pack`, signup hook, backfill |
 | 15 | `app_config` | public runtime settings + realtime |
 | 16 | `multi_copy_unlocks` | up to 4 copies of an UNLOCK card, one per distinct code; one unique serial per player via scanning |
+| 17 | `scan_to_unlock_unlimited` | `cards.requires_unlock`: UNLIMITED cards other than the base 15 unlock (unlimited copies) on the first scan; `owned_copies()`; ownership-aware stats/leaderboard |
 
 **Rules for new migrations**
 

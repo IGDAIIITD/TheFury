@@ -3543,6 +3543,785 @@ $$;
 revoke execute on function public.apply_claim(text, uuid) from public, anon, authenticated;
 grant execute on function public.apply_claim(text, uuid) to service_role;
 
+-- ******************** FILE: migrations/20260925000017_scan_to_unlock_unlimited.sql ********************
+-- Campus Forge → Supabase
+-- Migration 17: UNLIMITED cards (other than the base 15) must be scanned once.
+--
+-- Before: every UNLIMITED card (basic lands, the 10 starter creatures and all
+-- imported-set commons) was owned by everyone from the start.
+--
+-- Now: cards.requires_unlock marks UNLIMITED cards that are locked until the
+-- player scans ANY code for them once; after that the player owns unlimited
+-- copies. The base 15 (5 basic lands + 10 starter creatures) stay free.
+--
+--   * owned_copies(player, card) is the single ownership rule, used by
+--     apply_claim, validate_deck_spec and validate_deck:
+--       UNLIMITED → unlimited if free or unlocked, else 0
+--       UNLOCK    → number of player_unlocks rows (one per distinct code, ≤ 4)
+--       UNIQUE    → number of serials owned
+--   * collection-% queries (achievements, profile stats, leaderboard) count an
+--     UNLIMITED card as owned only if it is free or unlocked;
+--   * apply_claim: the first scan of a locked UNLIMITED card unlocks it
+--     (player_unlocks row, +10 XP × event bonus); later scans are
+--     discovery-only (reason UNLIMITED);
+--   * all imported-set commons already in the catalog are flagged.
+--
+-- Idempotent.
+
+alter table public.cards add column if not exists requires_unlock boolean not null default false;
+
+update public.cards
+   set requires_unlock = true
+ where ownership_type = 'UNLIMITED'
+   and requires_unlock = false
+   and forge_name not in ('Plains', 'Island', 'Swamp', 'Mountain', 'Forest',
+                          'Raging Goblin', 'Goblin Piker', 'Vulshok Berserker', 'Hill Giant', 'Fire Elemental',
+                          'Grizzly Bears', 'Elvish Warrior', 'Trained Armodon', 'War Mammoth', 'Craw Wurm');
+
+-- ---------------------------------------------------------------
+-- The ownership rule (copies a player may use in a deck).
+-- ---------------------------------------------------------------
+create or replace function public.owned_copies(p_player uuid, p_card uuid)
+returns integer
+language sql
+stable
+set search_path = public
+as $$
+    select case c.ownership_type
+        when 'UNLIMITED' then
+            case when not c.requires_unlock
+                   or exists (select 1 from public.player_unlocks u where u.player_id = p_player and u.card_id = c.id)
+                 then 2147483647 else 0 end
+        when 'UNLOCK' then
+            (select count(*)::integer from public.player_unlocks u where u.player_id = p_player and u.card_id = c.id)
+        else
+            (select count(*)::integer from public.unique_cards uc where uc.owner_id = p_player and uc.card_id = c.id)
+    end
+    from public.cards c
+    where c.id = p_card;
+$$;
+
+revoke execute on function public.owned_copies(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.owned_copies(uuid, uuid) to service_role;
+
+-- ---------------------------------------------------------------
+-- apply_claim (migration 16) + first scan unlocks locked UNLIMITED cards.
+-- ---------------------------------------------------------------
+create or replace function public.apply_claim(p_core text, p_player uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_max_copies constant integer := 4;   -- per UNLOCK card, one per distinct code
+    c          public.claims%rowtype;
+    v_card     public.cards%rowtype;
+    v_count    bigint;
+    v_unlocked boolean := false;
+    v_reason   text := null;
+    v_copies   integer := null;
+    v_xp       bigint := 0;
+    v_phys     uuid := null;
+    v_serial   integer;
+    v_bonus    numeric := 1.00;
+begin
+    perform public.assert_active_player(p_player);
+
+    select * into c from public.claims where token_core = p_core for update;
+    if not found then
+        raise exception 'Claim token not found: %', p_core using errcode = 'CF404';
+    end if;
+
+    select * into v_card from public.cards where id = c.card_id;
+    if not found then
+        raise exception 'unknown card' using errcode = 'CF404';
+    end if;
+
+    if c.status = 'REVOKED' then
+        raise exception 'Claim token has been revoked' using errcode = 'CF410';
+    end if;
+    if c.expires_at is not null and c.expires_at < now() then
+        update public.claims set status = 'EXPIRED' where id = c.id;
+        raise exception 'Claim token has expired' using errcode = 'CF410';
+    end if;
+    if v_card.ownership_type = 'UNIQUE' and c.claimed_by is not null then
+        raise exception 'This unique card has already been claimed' using errcode = 'CF409';
+    end if;
+    if c.status <> 'ACTIVE' then
+        raise exception 'Claim token is no longer active' using errcode = 'CF410';
+    end if;
+
+    -- serialize concurrent scans by the same player for the same card, so the
+    -- copy cap and the one-unique-per-player rule below can't be raced
+    perform pg_advisory_xact_lock(hashtextextended(p_player::text || ':' || v_card.id::text, 0));
+
+    if v_card.ownership_type = 'UNIQUE'
+       and exists (select 1 from public.unique_cards uq where uq.owner_id = p_player and uq.card_id = v_card.id) then
+        raise exception 'You already own a copy of this unique card; leave this one for someone else'
+            using errcode = 'CF409';
+    end if;
+
+    insert into public.discoveries (id, player_id, card_id, count, last_discovered)
+    values (gen_random_uuid(), p_player, c.card_id, 1, now())
+    on conflict on constraint uk_discoveries_player_card do update
+    set count = public.discoveries.count + 1,
+        last_discovered = now();
+
+    select d.count into v_count
+      from public.discoveries d
+     where d.player_id = p_player and d.card_id = c.card_id;
+
+    select e.bonus_multiplier into v_bonus
+      from public.events e
+     where e.active = true and e.start_time <= now() and e.end_time >= now()
+     order by e.start_time
+     limit 1;
+    if not found then
+        v_bonus := 1.00;
+    end if;
+
+    if v_card.ownership_type = 'UNLOCK' then
+        select count(*)::integer into v_copies
+          from public.player_unlocks where player_id = p_player and card_id = v_card.id;
+        if exists (select 1 from public.player_unlocks where player_id = p_player and claim_id = c.id) then
+            v_reason := 'SAME_CODE';
+        elsif v_copies >= v_max_copies then
+            v_reason := 'MAX_COPIES';
+        else
+            insert into public.player_unlocks (id, player_id, card_id, unlocked_at, claim_id)
+            values (gen_random_uuid(), p_player, v_card.id, now(), c.id);
+            v_copies := v_copies + 1;
+            v_unlocked := true;
+            v_xp := round(10 * v_bonus)::bigint;
+        end if;
+    elsif v_card.ownership_type = 'UNIQUE' then
+        select coalesce(max(uq.serial_number), 0) + 1 into v_serial
+          from public.unique_cards uq where uq.card_id = v_card.id;
+        v_phys := public.unique_physical_uuid(c.token_core);
+        insert into public.unique_cards (physical_uuid, owner_id, card_id, serial_number, history)
+        values (v_phys, p_player, c.card_id, v_serial, 'claimed via discovery')
+        on conflict (physical_uuid) do nothing;
+        v_copies := 1;
+        v_unlocked := true;
+        v_xp := round(10 * v_bonus)::bigint;
+    elsif v_card.requires_unlock
+          and not exists (select 1 from public.player_unlocks where player_id = p_player and card_id = v_card.id) then
+        -- UNLIMITED but locked: this first scan unlocks unlimited copies
+        insert into public.player_unlocks (id, player_id, card_id, unlocked_at, claim_id)
+        values (gen_random_uuid(), p_player, v_card.id, now(), c.id);
+        v_unlocked := true;
+        v_xp := round(10 * v_bonus)::bigint;
+    else
+        v_reason := 'UNLIMITED';
+    end if;
+
+    if v_unlocked then
+        update public.profiles set experience = experience + v_xp where id = p_player;
+        perform public.add_feed_entry('DISCOVERY',
+            case when v_card.ownership_type = 'UNLOCK' and v_copies > 1
+                 then 'found copy ' || v_copies || ' of ' || v_card.forge_name
+                 else 'discovered ' || v_card.forge_name end,
+            p_player, v_card.id);
+    else
+        perform public.add_feed_entry('DISCOVERY', 'scanned ' || v_card.forge_name, p_player, v_card.id);
+    end if;
+
+    if v_card.ownership_type = 'UNIQUE' then
+        update public.claims set status = 'CLAIMED', claimed_by = p_player, claimed_at = now()
+         where id = c.id;
+    else
+        update public.claims set claimed_by = p_player, claimed_at = now() where id = c.id;
+    end if;
+
+    insert into public.game_log (kind, player_id, card_id, ref_id, xp, detail)
+    values ('CLAIM', p_player, v_card.id, c.id, v_xp, jsonb_build_object(
+        'unlocked', v_unlocked,
+        'reason', v_reason,
+        'copiesOwned', v_copies,
+        'building', c.building,
+        'eventId', c.event_id,
+        'bonus', v_bonus,
+        'discoveryCount', v_count,
+        'physicalUuid', v_phys));
+
+    return jsonb_build_object(
+        'card', jsonb_build_object(
+            'id', v_card.id,
+            'oracleId', v_card.oracle_id,
+            'forgeName', v_card.forge_name,
+            'rarity', v_card.rarity,
+            'ownershipType', v_card.ownership_type,
+            'requiresUnlock', v_card.requires_unlock,
+            'setCode', v_card.set_code,
+            'manaValue', v_card.mana_value,
+            'types', v_card.types,
+            'colors', v_card.colors,
+            'imageUrl', v_card.image_url,
+            'discoverable', v_card.discoverable,
+            'spawnRegion', v_card.spawn_region,
+            'weight', v_card.weight,
+            'commanderEligible', v_card.commander_eligible
+        ),
+        'unlocked', v_unlocked,
+        'alreadyOwned', (not v_unlocked),
+        'reason', v_reason,
+        'copiesOwned', v_copies,
+        'maxCopies', case when v_card.ownership_type = 'UNLOCK' then v_max_copies end,
+        'discoveryCount', v_count,
+        'experienceAwarded', v_xp,
+        'token', c.token,
+        'building', c.building,
+        'physicalUuid', v_phys
+    );
+end;
+$$;
+
+revoke execute on function public.apply_claim(text, uuid) from public, anon, authenticated;
+grant execute on function public.apply_claim(text, uuid) to service_role;
+
+-- ---------------------------------------------------------------
+-- validate_deck_spec (migration 11) with owned_copies(); also fixes the
+-- color-identity check for multicolor cards (string_to_array(x, '') does not
+-- split into characters; a NULL delimiter does).
+-- ---------------------------------------------------------------
+create or replace function public.validate_deck_spec(
+    p_format_code  text,
+    p_commander    uuid,
+    p_cards        jsonb
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_uid       uuid := auth.uid();
+    f           public.formats%rowtype;
+    v_problems  jsonb := '[]'::jsonb;
+    e           record;
+    v_card      record;
+    v_owned_qty bigint;
+    v_leg       text;
+    v_basic     boolean;
+    v_total     integer := 0;
+    v_cmdr      record;
+    v_cmdr_colors text;
+    v_colors    text;
+    v_ch        text;
+    v_entry     record;
+    v_color_ok  boolean;
+begin
+    select * into f from public.formats where code = p_format_code;
+    if not found then
+        return jsonb_build_object('valid', false, 'problems', jsonb_build_array(
+            jsonb_build_object('code', 'UNKNOWN_FORMAT', 'message', 'Unknown format: ' || p_format_code, 'cardId', null)
+        ));
+    end if;
+
+    for e in
+        select (elem->>'cardId')::uuid as card_id,
+               sum(coalesce((elem->>'quantity')::integer, 0))::integer as qty
+        from jsonb_array_elements(coalesce(p_cards, '[]'::jsonb)) as elem
+        where elem->>'cardId' is not null
+        group by 1
+    loop
+        v_card := null;
+        select c.id, c.forge_name, c.ownership_type, c.colors, c.types, c.commander_eligible
+          into v_card
+          from public.cards c where c.id = e.card_id;
+        if not found then
+            v_problems := v_problems || jsonb_build_array(jsonb_build_object(
+                'code', 'UNKNOWN_CARD', 'message', 'Unknown card: ' || e.card_id, 'cardId', e.card_id));
+            continue;
+        end if;
+
+        v_owned_qty := coalesce(public.owned_copies(v_uid, e.card_id), 0);
+
+        if v_owned_qty = 0 then
+            v_problems := v_problems || jsonb_build_array(jsonb_build_object(
+                'code', 'NOT_OWNED', 'message', 'You do not own: ' || v_card.forge_name, 'cardId', e.card_id));
+        end if;
+        if v_owned_qty < e.qty then
+            v_problems := v_problems || jsonb_build_array(jsonb_build_object(
+                'code', 'NOT_ENOUGH_COPIES',
+                'message', 'Only ' || v_owned_qty || ' owned of: ' || v_card.forge_name,
+                'cardId', e.card_id));
+        end if;
+
+        select legality into v_leg from public.card_legalities
+         where card_id = e.card_id and format_id = f.id;
+        if v_leg = 'BANNED' then
+            v_problems := v_problems || jsonb_build_array(jsonb_build_object(
+                'code', 'BANNED', 'message', 'Banned in ' || f.name || ': ' || v_card.forge_name,
+                'cardId', e.card_id));
+        elsif v_leg = 'RESTRICTED' and e.qty > 1 then
+            v_problems := v_problems || jsonb_build_array(jsonb_build_object(
+                'code', 'RESTRICTED', 'message', 'Restricted to 1 copy in ' || f.name || ': ' || v_card.forge_name,
+                'cardId', e.card_id));
+        end if;
+
+        v_basic := v_card.types is not null and v_card.types like '%Basic Land%';
+        if not (f.basics_unlimited and v_basic) and e.qty > f.max_copies then
+            v_problems := v_problems || jsonb_build_array(jsonb_build_object(
+                'code', 'TOO_MANY_COPIES', 'message',
+                'Max ' || f.max_copies || ' copies in ' || f.name || ': ' || v_card.forge_name,
+                'cardId', e.card_id));
+        end if;
+
+        v_total := v_total + e.qty;
+    end loop;
+
+    if v_total < f.min_deck_size then
+        v_problems := v_problems || jsonb_build_array(jsonb_build_object(
+            'code', 'TOO_FEW_CARDS', 'message',
+            'Minimum ' || f.min_deck_size || ' cards, got ' || v_total, 'cardId', null));
+    end if;
+    if f.max_deck_size is not null and v_total > f.max_deck_size then
+        v_problems := v_problems || jsonb_build_array(jsonb_build_object(
+            'code', 'TOO_MANY_CARDS', 'message',
+            'Maximum ' || f.max_deck_size || ' cards, got ' || v_total, 'cardId', null));
+    end if;
+
+    if f.commander_required then
+        if p_commander is null then
+            v_problems := v_problems || jsonb_build_array(jsonb_build_object(
+                'code', 'NO_COMMANDER', 'message', 'A commander is required.', 'cardId', null));
+        else
+            v_cmdr := null;
+            select c.id, c.forge_name, c.colors, c.commander_eligible
+              into v_cmdr
+              from public.cards c where c.id = p_commander;
+            if not found then
+                v_problems := v_problems || jsonb_build_array(jsonb_build_object(
+                    'code', 'UNKNOWN_COMMANDER', 'message', 'Unknown commander card', 'cardId', p_commander));
+            else
+                if coalesce(public.owned_copies(v_uid, v_cmdr.id), 0) = 0 then
+                    v_problems := v_problems || jsonb_build_array(jsonb_build_object(
+                        'code', 'COMMANDER_NOT_OWNED', 'message', 'You do not own: ' || v_cmdr.forge_name,
+                        'cardId', v_cmdr.id));
+                end if;
+                if not v_cmdr.commander_eligible then
+                    v_problems := v_problems || jsonb_build_array(jsonb_build_object(
+                        'code', 'NOT_LEGENDARY', 'message', v_cmdr.forge_name || ' cannot be a commander.',
+                        'cardId', v_cmdr.id));
+                end if;
+                select legality into v_leg from public.card_legalities
+                 where card_id = v_cmdr.id and format_id = f.id;
+                if v_leg = 'BANNED' then
+                    v_problems := v_problems || jsonb_build_array(jsonb_build_object(
+                        'code', 'BANNED_COMMANDER', 'message', v_cmdr.forge_name || ' is banned as commander.',
+                        'cardId', v_cmdr.id));
+                end if;
+
+                v_cmdr_colors := coalesce(v_cmdr.colors, '');
+
+                -- color identity: every card's colors must be a subset of the commander's
+                for v_entry in
+                    select c.id, c.forge_name, c.colors
+                    from public.cards c
+                    where c.id in (
+                        select (elem->>'cardId')::uuid
+                        from jsonb_array_elements(coalesce(p_cards, '[]'::jsonb)) elem
+                        where elem->>'cardId' is not null
+                        union
+                        select p_commander
+                    )
+                loop
+                    v_colors := coalesce(v_entry.colors, '');
+                    v_color_ok := true;
+                    for v_ch in select * from unnest(string_to_array(v_colors, null)) loop
+                        if position(v_ch in v_cmdr_colors) = 0 then
+                            v_color_ok := false;
+                            exit;
+                        end if;
+                    end loop;
+                    if not v_color_ok then
+                        v_problems := v_problems || jsonb_build_array(jsonb_build_object(
+                            'code', 'COLOR_IDENTITY', 'message',
+                            v_entry.forge_name || ' (colors ' || v_colors || ') is outside '
+                                || v_cmdr.forge_name || '''s color identity (' || v_cmdr_colors || ').',
+                            'cardId', v_entry.id));
+                    end if;
+                end loop;
+            end if;
+        end if;
+    end if;
+
+    return jsonb_build_object('valid', (v_problems = '[]'::jsonb), 'problems', v_problems);
+end;
+$$;
+
+revoke execute on function public.validate_deck_spec(text, uuid, jsonb) from public, anon;
+grant execute on function public.validate_deck_spec(text, uuid, jsonb) to authenticated, service_role;
+
+-- ---------------------------------------------------------------
+-- validate_deck (migration 13, battle time) with owned_copies().
+-- ---------------------------------------------------------------
+create or replace function public.validate_deck(
+    p_deck  uuid,
+    p_event uuid default null
+)
+returns setof public.deck_problem
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    d         public.decks%rowtype;
+    f         public.formats%rowtype;
+    v_total   integer;
+    v_allowed jsonb;
+    e         record;
+begin
+    select * into d from public.decks where id = p_deck;
+    if not found then
+        return next row('ERROR', 'NOT_FOUND', 'deck not found')::public.deck_problem;
+        return;
+    end if;
+
+    select * into f from public.formats where code = d.format_code;
+    if not found then
+        return next row('ERROR', 'UNKNOWN_FORMAT', format('unknown format %s', d.format_code))::public.deck_problem;
+        return;
+    end if;
+
+    if p_event is not null then
+        select allowed_sets_json::jsonb into v_allowed from public.events where id = p_event and active = true;
+    end if;
+
+    select coalesce(sum(dc.quantity), 0)::integer into v_total
+      from public.deck_cards dc where dc.deck_id = p_deck;
+
+    for e in
+        select c.id, c.forge_name, c.set_code, dc.quantity,
+               coalesce(c.types ilike '%Basic%', false) as basic,
+               coalesce(public.owned_copies(d.player_id, c.id), 0) as owned_qty,
+               exists (select 1 from public.card_legalities cl
+                        where cl.card_id = c.id and cl.format_id = f.id and cl.legality = 'BANNED') as banned
+          from public.deck_cards dc
+          join public.cards c on c.id = dc.card_id
+         where dc.deck_id = p_deck
+    loop
+        if e.owned_qty = 0 then
+            return next row('ERROR', 'NOT_OWNED', format('%s is not owned by the player', e.forge_name))::public.deck_problem;
+        elsif e.owned_qty < e.quantity then
+            return next row('ERROR', 'NOT_ENOUGH_COPIES', format('only %s owned of %s', e.owned_qty, e.forge_name))::public.deck_problem;
+        end if;
+        if not (f.basics_unlimited and e.basic) and e.quantity > f.max_copies then
+            return next row('ERROR', 'TOO_MANY_COPIES', format('%s exceeds max copies of %s', e.forge_name, f.max_copies))::public.deck_problem;
+        end if;
+        if e.banned then
+            return next row('ERROR', 'BANNED_CARD', format('%s is banned in %s', e.forge_name, f.name))::public.deck_problem;
+        end if;
+        if v_allowed is not null and not e.basic
+           and (e.set_code is null or not (e.set_code = any (select jsonb_array_elements_text(v_allowed)))) then
+            return next row('ERROR', 'NOT_IN_EVENT', format('%s is not in the event allowed sets', e.forge_name))::public.deck_problem;
+        end if;
+    end loop;
+
+    if v_total < f.min_deck_size then
+        return next row('WARNING', 'NOT_ENOUGH_CARDS', format('deck has %s cards, requires %s', v_total, f.min_deck_size))::public.deck_problem;
+    end if;
+    if f.max_deck_size is not null and v_total > f.max_deck_size then
+        return next row('ERROR', 'TOO_MANY_CARDS', format('deck has %s cards, maximum %s', v_total, f.max_deck_size))::public.deck_problem;
+    end if;
+    if f.commander_required and d.commander_card_id is null then
+        return next row('ERROR', 'NO_COMMANDER', 'a commander is required')::public.deck_problem;
+    end if;
+end;
+$$;
+
+revoke execute on function public.validate_deck(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.validate_deck(uuid, uuid) to service_role;
+
+-- ---------------------------------------------------------------
+-- sweep_achievements (migration 11): collection % counts locked UNLIMITED
+-- cards only once unlocked.
+-- ---------------------------------------------------------------
+create or replace function public.sweep_achievements(p_player uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_level    integer;
+    v_disc     bigint;
+    v_played   integer;
+    v_wins     integer;
+    v_owned    integer;
+    v_total    integer;
+    v_comp     integer;
+    v_trades   bigint;
+    v_undef    integer;
+    ac         record;
+    v_value    bigint;
+begin
+    if p_player is null then
+        return;
+    end if;
+
+    select public.compute_level(p.experience) into v_level
+      from public.profiles p where p.id = p_player;
+    if not found then
+        return;
+    end if;
+
+    select coalesce(sum(count), 0) into v_disc
+      from public.discoveries where player_id = p_player;
+
+    select count(*) into v_played from public.matches
+     where (player1_id = p_player or player2_id = p_player)
+       and status in ('FINISHED', 'CONCEDED');
+    select count(*) into v_wins from public.matches
+     where winner_id = p_player and status in ('FINISHED', 'CONCEDED');
+
+    select count(*) into v_total from public.cards;
+    select count(distinct c.id) into v_owned from public.cards c
+     where (c.ownership_type = 'UNLIMITED' and not c.requires_unlock)
+        or exists (select 1 from public.player_unlocks u where u.player_id = p_player and u.card_id = c.id)
+        or exists (select 1 from public.unique_cards uc where uc.owner_id = p_player and uc.card_id = c.id);
+
+    v_comp := case when v_total = 0 then 0 else round(100.0 * v_owned / v_total)::integer end;
+
+    select count(*) into v_trades from public.trades
+     where status = 'ACCEPTED' and (sender_id = p_player or receiver_id = p_player);
+
+    v_undef := case when v_played >= 1 and v_wins = v_played then 1 else 0 end;
+
+    for ac in select * from public.achievement_catalog() loop
+        v_value := case ac.metric
+            when 'DISCOVERIES'    then v_disc
+            when 'BATTLES_WON'    then v_wins
+            when 'UNIQUE_TRADES'  then v_trades
+            when 'LEVEL'          then v_level
+            when 'COLLECTION_PCT' then v_comp
+            when 'UNDEFEATED'     then v_undef
+            else 0
+        end;
+        if v_value >= ac.threshold then
+            insert into public.player_achievements (id, player_id, code)
+            values (gen_random_uuid(), p_player, ac.code)
+            on conflict on constraint uk_player_achievements_player_code do nothing;
+        end if;
+    end loop;
+end;
+$$;
+
+revoke execute on function public.sweep_achievements(uuid) from public, anon, authenticated;
+grant execute on function public.sweep_achievements(uuid) to service_role;
+
+-- ---------------------------------------------------------------
+-- my_profile_stats (migration 13): same ownership rule.
+-- ---------------------------------------------------------------
+create or replace function public.my_profile_stats(p_player uuid default null)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_uid       uuid := coalesce(p_player, auth.uid());
+    v_exp       bigint;
+    v_level     integer;
+    v_xp_next   bigint;
+    v_disc      bigint;
+    v_owned     integer;
+    v_total     integer;
+    v_comp      integer;
+    v_colors    text[];
+    v_buildings text[];
+    v_played    integer;
+    v_wins      integer;
+    v_losses    integer;
+    v_rate      integer;
+    v_player    jsonb;
+    v_badges    jsonb;
+begin
+    if v_uid is null then
+        return null;
+    end if;
+    if auth.uid() is not null and v_uid <> auth.uid() and not public.is_admin() then
+        raise exception 'You can only view your own stats' using errcode = 'CF403';
+    end if;
+
+    select
+        p.experience,
+        public.compute_level(p.experience),
+        jsonb_build_object(
+            'id', p.id, 'email', p.email, 'displayName', p.display_name, 'role', p.role,
+            'avatar', p.avatar, 'studentId', p.student_id,
+            'degreeLevel', p.degree_level, 'specialization', p.specialization,
+            'experience', p.experience, 'level', public.compute_level(p.experience)
+        )
+    into v_exp, v_level, v_player
+      from public.profiles p where p.id = v_uid;
+    if not found then
+        return null;
+    end if;
+
+    v_xp_next := greatest(0, (v_level * 100) - v_exp);
+
+    select coalesce(sum(count), 0) into v_disc
+      from public.discoveries where player_id = v_uid;
+
+    select count(*) into v_total from public.cards;
+    select count(distinct c.id) into v_owned from public.cards c
+     where (c.ownership_type = 'UNLIMITED' and not c.requires_unlock)
+        or exists (select 1 from public.player_unlocks u where u.player_id = v_uid and u.card_id = c.id)
+        or exists (select 1 from public.unique_cards uc where uc.owner_id = v_uid and uc.card_id = c.id);
+    v_comp := case when v_total = 0 then 0 else round(100.0 * v_owned / v_total)::integer end;
+
+    select array_agg(ch order by cnt desc, ch asc) into v_colors
+    from (
+        select ch, count(*) as cnt
+        from (
+            select c.id, c.colors
+            from public.cards c
+            where ((c.ownership_type = 'UNLIMITED' and not c.requires_unlock)
+                   or exists (select 1 from public.player_unlocks u where u.player_id = v_uid and u.card_id = c.id)
+                   or exists (select 1 from public.unique_cards uc where uc.owner_id = v_uid and uc.card_id = c.id))
+              and coalesce(c.colors, '') <> ''
+        ) owned,
+        lateral unnest(string_to_array(upper(owned.colors), null)) as ch
+        where ch in ('W', 'U', 'B', 'R', 'G')
+        group by ch
+        order by cnt desc, ch asc
+        limit 3
+    ) s;
+
+    select array_agg(b order by b) into v_buildings
+    from (
+        select distinct btrim(building) as b
+        from public.claims
+        where claimed_by = v_uid and building is not null and btrim(building) <> ''
+    ) s;
+
+    select count(*) into v_played from public.matches
+     where (player1_id = v_uid or player2_id = v_uid) and status in ('FINISHED', 'CONCEDED');
+    select count(*) into v_wins from public.matches
+     where winner_id = v_uid and status in ('FINISHED', 'CONCEDED');
+    v_losses := v_played - v_wins;
+    v_rate := case when v_played = 0 then 0 else round(100.0 * v_wins / v_played)::integer end;
+
+    perform public.sweep_achievements(v_uid);
+    select coalesce(jsonb_agg(jsonb_build_object('code', a.code, 'name', c.name, 'description', c.description)
+                   order by a.unlocked_at), '[]'::jsonb)
+      into v_badges
+      from public.player_achievements a
+      left join public.achievement_catalog() c on c.code = a.code
+     where a.player_id = v_uid;
+
+    return jsonb_build_object(
+        'player', v_player,
+        'experience', v_exp,
+        'level', v_level,
+        'experienceToNextLevel', v_xp_next,
+        'collectionCompletionPercent', v_comp,
+        'ownedCards', v_owned,
+        'totalCards', v_total,
+        'totalDiscoveries', v_disc,
+        'favoriteColors', coalesce(v_colors, '{}'),
+        'buildingsVisited', coalesce(v_buildings, '{}'),
+        'battleStats', jsonb_build_object(
+            'played', v_played, 'wins', v_wins, 'losses', v_losses, 'winRatePercent', v_rate
+        ),
+        'badges', v_badges
+    );
+end;
+$$;
+
+revoke execute on function public.my_profile_stats(uuid) from public, anon;
+grant execute on function public.my_profile_stats(uuid) to authenticated, service_role;
+
+-- ---------------------------------------------------------------
+-- leaderboard_full (migration 11): same ownership rule for 'collection'.
+-- ---------------------------------------------------------------
+create or replace function public.leaderboard_full(
+    p_metric       text     default 'level',
+    p_degree_level text     default null,
+    p_specialization text   default null,
+    p_department   text     default null,
+    p_limit        integer  default 50
+)
+returns jsonb
+language sql
+security definer
+set search_path = public
+as $$
+    with
+    tot as (
+        select count(*)::integer as n from public.cards
+    ),
+    base as (
+        select
+            p.id, p.display_name, p.avatar, p.degree_level, p.specialization,
+            p.experience,
+            public.compute_level(p.experience) as level,
+            (select count(distinct c.id) from public.cards c
+              where (c.ownership_type = 'UNLIMITED' and not c.requires_unlock)
+                 or exists (select 1 from public.player_unlocks u where u.player_id = p.id and u.card_id = c.id)
+                 or exists (select 1 from public.unique_cards uc where uc.owner_id = p.id and uc.card_id = c.id)
+            ) as owned_count,
+            (select count(*) from public.matches m
+              where (m.player1_id = p.id or m.player2_id = p.id) and m.status in ('FINISHED', 'CONCEDED')) as played,
+            (select count(*) from public.matches m
+              where m.winner_id = p.id and m.status in ('FINISHED', 'CONCEDED')) as wins
+        from public.profiles p
+        where p.banned = false
+          and (p_degree_level is null     or upper(p.degree_level) = upper(p_degree_level))
+          and (p_specialization is null   or upper(p.specialization) = upper(p_specialization))
+          and (p_department is null       or public.department_of(p.specialization) = upper(p_department))
+    ),
+    scored as (
+        select
+            b.*,
+            case p_metric
+                when 'collection' then case when t.n = 0 then 0 else round(100.0 * b.owned_count / t.n)::integer end
+                when 'winrate'    then case when b.played = 0 then 0 else round(100.0 * b.wins / b.played)::integer end
+                else b.level
+            end as score,
+            case p_metric
+                when 'collection' then b.owned_count
+                when 'winrate'    then b.wins
+                else b.experience
+            end as value,
+            row_number() over (
+                order by
+                    case p_metric
+                        when 'collection' then case when t.n = 0 then 0 else round(100.0 * b.owned_count / t.n)::integer end
+                        when 'winrate'    then case when b.played = 0 then 0 else round(100.0 * b.wins / b.played)::integer end
+                        else b.level
+                    end desc,
+                    case p_metric
+                        when 'collection' then b.owned_count
+                        when 'winrate'    then b.wins
+                        else b.experience
+                    end desc,
+                    b.display_name asc
+            ) as rn
+        from base b
+        cross join tot t
+    )
+    select jsonb_build_object(
+        'rows', coalesce((
+            select jsonb_agg(jsonb_build_object(
+                'rank', s.rn, 'playerId', s.id, 'displayName', s.display_name,
+                'avatar', s.avatar, 'degreeLevel', s.degree_level,
+                'specialization', s.specialization, 'score', s.score, 'value', s.value)
+            order by s.rn)
+            from scored s
+            where s.rn <= least(greatest(p_limit, 1), 100)
+        ), '[]'::jsonb),
+        'myRank', (select s.rn from scored s where s.id = auth.uid()),
+        'total', (select count(*) from scored)
+    );
+$$;
+
+revoke execute on function public.leaderboard_full(text, text, text, text, integer) from public, anon;
+grant execute on function public.leaderboard_full(text, text, text, text, integer) to authenticated, service_role;
+
 -- ******************** FILE: seed.sql (card catalog) ********************
 -- Campus Forge → Supabase seed data (idempotent)
 -- Run via `supabase db seed` (NOT `supabase db push`): mirrors the backend
@@ -3670,273 +4449,274 @@ on conflict (oracle_id) do nothing;
 -- ******************** FILE: seed_sets/m19.sql (imported set) ********************
 -- Campus Forge catalog: M19 (generated by scripts/import-scryfall-set.mjs m19 — do not edit by hand)
 -- 260 cards (133 UNLOCK, 16 UNIQUE, 111 UNLIMITED); basic lands excluded.
--- Ownership by rarity: common → UNLIMITED, uncommon/rare → UNLOCK, mythic → UNIQUE.
+-- Ownership by rarity: common → UNLIMITED (locked until scanned once), uncommon/rare → UNLOCK
+-- (one copy per distinct code, max 4), mythic → UNIQUE.
 -- Idempotent: cards whose name is already in the catalog are skipped (their ownership is left alone).
 
-insert into public.cards (id, oracle_id, forge_name, rarity, ownership_type, set_code, mana_value, types, colors, image_url, discoverable, spawn_region, weight, commander_eligible)
+insert into public.cards (id, oracle_id, forge_name, rarity, ownership_type, set_code, mana_value, types, colors, image_url, discoverable, spawn_region, weight, commander_eligible, requires_unlock)
 select v.id::uuid, v.oracle_id, v.forge_name, v.rarity, v.ownership_type, v.set_code, v.mana_value, v.types,
-       v.colors, v.image_url, v.discoverable, v.spawn_region, v.weight, v.commander_eligible
+       v.colors, v.image_url, v.discoverable, v.spawn_region, v.weight, v.commander_eligible, v.requires_unlock
 from (values
-    ('0503c55d-74bb-4165-9273-127c01bb2214', 'f8e1b38a-2a77-4cf1-8bef-31acb61ede10', 'Aegis of the Heavens', 'Uncommon', 'UNLOCK', 'M19', 2, 'Instant', 'W', null, true, 'Library', 4.0, false),
-    ('226f7c45-db9f-4d48-b575-4d2f1904c963', 'd2575513-72fa-49c7-be6b-9f6f85950f88', 'Aethershield Artificer', 'Uncommon', 'UNLOCK', 'M19', 4, 'Creature — Dwarf Artificer', 'W', null, true, 'Library', 4.0, false),
-    ('4c565076-5db2-47ea-8ee0-4a4fd7bb353d', 'b25bea73-7444-4ee2-8022-611461506117', 'Ajani, Adversary of Tyrants', 'Mythic', 'UNIQUE', 'M19', 4, 'Legendary Planeswalker — Ajani', 'W', null, false, 'Library', 0.1, false),
-    ('1aebbb57-31b3-4289-815e-4f529e29f3ea', '17c4807c-158e-4a86-90f1-d8fb2ebe892a', 'Ajani''s Last Stand', 'Rare', 'UNLOCK', 'M19', 4, 'Enchantment', 'W', null, true, 'Library', 2.0, false),
-    ('2f717e04-c078-4696-9ed6-e973033d7be0', '95e94dea-5ac0-4d6f-adec-ca147aee861f', 'Ajani''s Pridemate', 'Uncommon', 'UNLOCK', 'M19', 2, 'Creature — Cat Soldier', 'W', null, true, 'Library', 4.0, false),
-    ('c9045fcb-b633-4c35-8058-6234311551ae', '4a782bf9-4051-4613-8852-33b0d85a0edd', 'Ajani''s Welcome', 'Uncommon', 'UNLOCK', 'M19', 1, 'Enchantment', 'W', null, true, 'Library', 4.0, false),
-    ('f4bae0e4-1143-4dc4-afb1-e6b4201ff101', 'f63ea0e5-7769-4a22-bbb3-658281141d8c', 'Angel of the Dawn', 'Common', 'UNLIMITED', 'M19', 5, 'Creature — Angel', 'W', null, true, 'Library', 5.0, false),
-    ('62d2e929-7ae3-4560-9cfa-53b89c8a6016', 'd89bbfe7-e7ef-4f1c-a6b5-6d8ef4079daa', 'Cavalry Drillmaster', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Human Knight', 'W', null, true, 'Library', 5.0, false),
-    ('5be8eed7-c033-42cc-bd21-4512db7af66c', 'aff34f28-f707-4458-8af3-1bd5b13a6b10', 'Cleansing Nova', 'Rare', 'UNLOCK', 'M19', 5, 'Sorcery', 'W', null, true, 'Library', 2.0, false),
-    ('c2f461b1-c801-4f0c-8fd7-fe68b6078ac6', 'ebd33f4c-2cc8-46e3-b367-ce5b37c2719b', 'Daybreak Chaplain', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Human Cleric', 'W', null, true, 'Library', 5.0, false),
-    ('7e1e0f13-35a6-4a5e-8666-47bc5c275be7', '6a077a9b-d725-4b14-957f-1586db2adf59', 'Dwarven Priest', 'Common', 'UNLIMITED', 'M19', 4, 'Creature — Dwarf Cleric', 'W', null, true, 'Library', 5.0, false),
-    ('e388c433-3a37-45f6-825a-d13d2223b6f7', 'b500c460-2814-47a4-b307-17ca519f3565', 'Gallant Cavalry', 'Common', 'UNLIMITED', 'M19', 4, 'Creature — Human Knight', 'W', null, true, 'Library', 5.0, false),
-    ('452591ca-7273-4e47-820b-3ff89697a036', 'cb97da84-1d13-4795-b68a-2bf111a50067', 'Herald of Faith', 'Uncommon', 'UNLOCK', 'M19', 5, 'Creature — Angel', 'W', null, true, 'Library', 4.0, false),
-    ('197743cd-249c-42ba-ac8d-027c088f8418', '207c7f93-3abf-44c5-ace6-3f86359c9745', 'Hieromancer''s Cage', 'Uncommon', 'UNLOCK', 'M19', 4, 'Enchantment', 'W', null, true, 'Library', 4.0, false),
-    ('812cf63f-aa3d-405b-92e1-7ffa31352481', 'd465a3d6-5830-456c-8e7a-908b464db846', 'Inspired Charge', 'Common', 'UNLIMITED', 'M19', 4, 'Instant', 'W', null, true, 'Library', 5.0, false),
-    ('7c1d36b5-37fb-4e52-ad85-c3a09a990ea0', '87bd0fdb-c5b9-46ea-9858-1a870960351f', 'Invoke the Divine', 'Common', 'UNLIMITED', 'M19', 3, 'Instant', 'W', null, true, 'Library', 5.0, false),
-    ('3d9ce5eb-eaeb-4c93-8d31-4aeb8fcc4cce', 'f42d4556-5be2-4861-9f88-1b630b43eff2', 'Isolate', 'Rare', 'UNLOCK', 'M19', 1, 'Instant', 'W', null, true, 'Library', 2.0, false),
-    ('213b4584-420a-48c2-9709-7b07458e914b', '524d81fb-33f5-4e77-ae41-477b91e67be4', 'Knight of the Tusk', 'Common', 'UNLIMITED', 'M19', 6, 'Creature — Human Knight', 'W', null, true, 'Library', 5.0, false),
-    ('734ff6ac-000d-4fc6-b97b-07b9b21f745c', '63604320-68de-415e-b1f9-dd0f85c5d8a3', 'Knight''s Pledge', 'Common', 'UNLIMITED', 'M19', 2, 'Enchantment — Aura', 'W', null, true, 'Library', 5.0, false),
-    ('366ab022-967d-48ff-a1f9-4bd642dba1ae', '9ba6cec6-97bf-4a83-9ffa-77e187d0945b', 'Knightly Valor', 'Uncommon', 'UNLOCK', 'M19', 5, 'Enchantment — Aura', 'W', null, true, 'Library', 4.0, false),
-    ('2ffcbcda-2ba3-45e7-80c0-85ea3b7eea0c', 'a8a8407c-d0e3-4311-82ed-1ab1f75159d9', 'Lena, Selfless Champion', 'Rare', 'UNLOCK', 'M19', 6, 'Legendary Creature — Human Knight', 'W', null, true, 'Library', 2.0, true),
-    ('724738ad-6a9b-4ef6-b637-558645cd8151', 'de1e1352-adb2-4ac1-bb2a-ee654d5c727d', 'Leonin Vanguard', 'Uncommon', 'UNLOCK', 'M19', 1, 'Creature — Cat Soldier', 'W', null, true, 'Library', 4.0, false),
-    ('b31b2e5e-6572-462a-9fa0-1b2e660099e3', '8b1351e6-165e-4ca3-96d5-4774b3176362', 'Leonin Warleader', 'Rare', 'UNLOCK', 'M19', 4, 'Creature — Cat Soldier', 'W', null, true, 'Library', 2.0, false),
-    ('928d4250-c379-4134-a263-7811c80a8760', '57f0f55d-4cf9-4a35-96dd-05c24c2a9a4f', 'Loxodon Line Breaker', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Elephant Soldier', 'W', null, true, 'Library', 5.0, false),
-    ('9db10390-725e-40f5-885b-a433e7b46f52', '2c006a63-0550-4a87-a5fe-f4247857271c', 'Luminous Bonds', 'Common', 'UNLIMITED', 'M19', 3, 'Enchantment — Aura', 'W', null, true, 'Library', 5.0, false),
-    ('4a0857fa-f2cc-4c01-9fe5-8f74d08d1b29', '531f78d5-5004-4b02-99c7-b390cb342fd9', 'Make a Stand', 'Uncommon', 'UNLOCK', 'M19', 3, 'Instant', 'W', null, true, 'Library', 4.0, false),
-    ('5e18bd43-6cee-40a3-88f5-c775fb705172', 'b9f4f96b-6e54-4fe6-8df7-623e0fc72409', 'Mentor of the Meek', 'Rare', 'UNLOCK', 'M19', 3, 'Creature — Human Soldier', 'W', null, true, 'Library', 2.0, false),
-    ('dc45dcdd-ed92-43f6-b6d2-670b3252ed27', '593caa15-e1d1-477f-bbb4-124d7a7b81f3', 'Mighty Leap', 'Common', 'UNLIMITED', 'M19', 2, 'Instant', 'W', null, true, 'Library', 5.0, false),
-    ('43c5bf25-937c-4e17-9ed4-b4c4579fa9dc', 'edb6ae9e-a41c-4d82-97bf-4be00e98364c', 'Militia Bugler', 'Uncommon', 'UNLOCK', 'M19', 3, 'Creature — Human Soldier', 'W', null, true, 'Library', 4.0, false),
-    ('00101358-0e89-4bd1-b1f2-e889645b616e', '916d2a0d-1c3e-4102-958d-524b6b4df509', 'Novice Knight', 'Uncommon', 'UNLOCK', 'M19', 1, 'Creature — Human Knight', 'W', null, true, 'Library', 4.0, false),
-    ('0ea1dfb4-1983-41f7-956c-f2a1d1489b54', '014d00fc-434a-4b06-84b2-afd930677d61', 'Oreskos Swiftclaw', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Cat Warrior', 'W', null, true, 'Library', 5.0, false),
-    ('0c04eafe-8be0-416e-a5b9-486a3b3b5984', '24db5905-d513-42c6-9e9d-114ac5cbd21d', 'Pegasus Courser', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Pegasus', 'W', null, true, 'Library', 5.0, false),
-    ('9620716d-9be8-4ebd-80d2-679373f4f897', 'c40bc9f6-2b72-4ae1-b912-50075af59628', 'Remorseful Cleric', 'Rare', 'UNLOCK', 'M19', 2, 'Creature — Spirit Cleric', 'W', null, true, 'Library', 2.0, false),
-    ('586854d1-edfd-4c66-873d-df459324dbfd', '2ac93092-1a57-4cf7-8f03-1dca86d5c476', 'Resplendent Angel', 'Mythic', 'UNIQUE', 'M19', 3, 'Creature — Angel', 'W', null, false, 'Library', 0.1, false),
-    ('dfbdd90c-1ae3-45e5-b1e5-5b8615a1511f', 'b1385b03-cb4b-4812-857f-7421f1df39af', 'Revitalize', 'Common', 'UNLIMITED', 'M19', 2, 'Instant', 'W', null, true, 'Library', 5.0, false),
-    ('c6691e62-8887-41e8-8e74-76ee2353d45e', '438ee544-78a2-4e32-9343-70838b60ac16', 'Rustwing Falcon', 'Common', 'UNLIMITED', 'M19', 1, 'Creature — Bird', 'W', null, true, 'Library', 5.0, false),
-    ('d21e0516-4430-4292-850b-f5c524d7f8f8', 'e07b6988-9ee7-4f20-8aa5-7dfa87ff507b', 'Shield Mare', 'Uncommon', 'UNLOCK', 'M19', 3, 'Creature — Horse', 'W', null, true, 'Library', 4.0, false),
-    ('c57417c7-867b-4b64-bfe3-1744dfe9b44d', 'a375b739-6a6c-4e07-9b1c-a304f84ea2cc', 'Star-Crowned Stag', 'Common', 'UNLIMITED', 'M19', 4, 'Creature — Elk', 'W', null, true, 'Library', 5.0, false),
-    ('3644df41-b690-4581-ac7d-c85cec75411f', '437661f7-a32f-45c9-a006-05a1e38ee8d9', 'Suncleanser', 'Rare', 'UNLOCK', 'M19', 2, 'Creature — Human Cleric', 'W', null, true, 'Library', 2.0, false),
-    ('66fbde22-d98d-4f12-b4d8-1bad2a9878b2', 'c60b8edd-aa3f-48ea-b202-d10599f91d9d', 'Take Vengeance', 'Common', 'UNLIMITED', 'M19', 2, 'Sorcery', 'W', null, true, 'Library', 5.0, false),
-    ('8320e35b-15b9-4f98-b9b8-9c951696408b', '12c7289f-da53-403a-a607-227f43c7e171', 'Trusty Packbeast', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Beast', 'W', null, true, 'Library', 5.0, false),
-    ('6ad750bc-850b-483b-8910-eb6562f925bc', 'b5c03abf-4297-4402-9107-539e92d41f2f', 'Valiant Knight', 'Rare', 'UNLOCK', 'M19', 4, 'Creature — Human Knight', 'W', null, true, 'Library', 2.0, false),
-    ('5d6178ed-6353-4733-81e1-7b3dc592c3bd', '0a90d1fb-7a76-4b62-b001-4a539a8e5df1', 'Aether Tunnel', 'Uncommon', 'UNLOCK', 'M19', 2, 'Enchantment — Aura', 'U', null, true, 'Building B', 4.0, false),
-    ('a07b1d89-1e6a-4e95-be89-1f03182fc470', 'a97da5a9-17fc-4367-81e1-17ff81601a63', 'Anticipate', 'Common', 'UNLIMITED', 'M19', 2, 'Instant', 'U', null, true, 'Building B', 5.0, false),
-    ('1b12dfc1-81f2-44b2-baa2-73cc21363978', 'ad5f9a18-89a5-4bcb-9cd7-5399ffd252d3', 'Aven Wind Mage', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Bird Wizard', 'U', null, true, 'Building B', 5.0, false),
-    ('e6966738-b4fc-4854-81b0-09de305854f2', 'ad11ff81-acaa-4529-ba15-718dadbea259', 'Aviation Pioneer', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Human Artificer', 'U', null, true, 'Building B', 5.0, false),
-    ('4579e7fc-650d-41ba-8ed7-3bd6453a3ce3', '31be5bf4-9950-456c-8365-74b48e132ef5', 'Bone to Ash', 'Uncommon', 'UNLOCK', 'M19', 4, 'Instant', 'U', null, true, 'Building B', 4.0, false),
-    ('9cff3fae-e072-4068-a1de-27de3d89c532', '7d00fb28-ea6c-49a9-b4af-ffb38860a9a7', 'Cancel', 'Common', 'UNLIMITED', 'M19', 3, 'Instant', 'U', null, true, 'Building B', 5.0, false),
-    ('1081df25-1137-4c4d-909b-40e78723652c', 'a620a765-97ba-4687-acfd-4dec7da75d9f', 'Departed Deckhand', 'Uncommon', 'UNLOCK', 'M19', 2, 'Creature — Spirit Pirate', 'U', null, true, 'Building B', 4.0, false),
-    ('2ff7c89c-41dc-4ac3-bbce-38ab86f435ea', '9d8fe3f8-5027-4f9e-999e-e277caa96478', 'Disperse', 'Common', 'UNLIMITED', 'M19', 2, 'Instant', 'U', null, true, 'Building B', 5.0, false),
-    ('cb3b35b8-f321-46d8-a441-6b9a6efa9021', '273b339c-964b-4a18-8eb5-ceb8abcdfd9e', 'Divination', 'Common', 'UNLIMITED', 'M19', 3, 'Sorcery', 'U', null, true, 'Building B', 5.0, false),
-    ('27d38bba-6eb9-4dd8-81aa-722def89b163', 'a34c3012-f787-4998-93c7-89c4decaa1ba', 'Djinn of Wishes', 'Rare', 'UNLOCK', 'M19', 5, 'Creature — Djinn', 'U', null, true, 'Building B', 2.0, false),
-    ('cb38f190-30f0-49ca-99c3-d3cdf21075e8', '48a8fce6-b493-4b1d-8ac8-2a4f4b4781b5', 'Dwindle', 'Common', 'UNLIMITED', 'M19', 3, 'Enchantment — Aura', 'U', null, true, 'Building B', 5.0, false),
-    ('975f61eb-a121-4f43-93a4-c6f20c6aee84', '46665089-aa3d-44c3-964d-6638dfbb5782', 'Essence Scatter', 'Common', 'UNLIMITED', 'M19', 2, 'Instant', 'U', null, true, 'Building B', 5.0, false),
-    ('ccad82f5-5c5c-42ad-b66e-942f0d9631ca', 'fd28fe55-36cd-4242-8dd4-edb58fbb9895', 'Exclusion Mage', 'Uncommon', 'UNLOCK', 'M19', 3, 'Creature — Human Wizard', 'U', null, true, 'Building B', 4.0, false),
-    ('e0aa62c0-d24b-4bce-9f2b-d42402b0830c', '6dc534e8-e22b-4e3c-aa30-c6e4c84f698c', 'Frilled Sea Serpent', 'Common', 'UNLIMITED', 'M19', 6, 'Creature — Serpent', 'U', null, true, 'Building B', 5.0, false),
-    ('77d9e666-d9c9-4ccd-89a5-83de79677fa6', '589d6b67-17ad-4ca7-9b0c-1b919bf03a27', 'Gearsmith Prodigy', 'Common', 'UNLIMITED', 'M19', 1, 'Creature — Human Artificer', 'U', null, true, 'Building B', 5.0, false),
-    ('347760a1-03f5-4cc9-87ad-e08986b1ea21', '8d813b72-8ead-4a61-88ff-e93c8d843196', 'Ghostform', 'Common', 'UNLIMITED', 'M19', 2, 'Sorcery', 'U', null, true, 'Building B', 5.0, false),
-    ('7e925a7a-da5b-4d5d-b5ff-37645ac217f9', '29933a32-3738-4ec5-aa6d-ce3684e2e5a3', 'Horizon Scholar', 'Uncommon', 'UNLOCK', 'M19', 6, 'Creature — Sphinx', 'U', null, true, 'Building B', 4.0, false),
-    ('eff03d37-d90a-4dcc-bacd-64fd71301354', '2518a4f2-607f-41bb-9389-2009138d6b09', 'Metamorphic Alteration', 'Rare', 'UNLOCK', 'M19', 2, 'Enchantment — Aura', 'U', null, true, 'Building B', 2.0, false),
-    ('5b3ffc69-f21b-410e-8993-8c1b4669fc19', '7275fb8c-571a-4c4c-889a-829419332e51', 'Mirror Image', 'Uncommon', 'UNLOCK', 'M19', 3, 'Creature — Shapeshifter', 'U', null, true, 'Building B', 4.0, false),
-    ('a35c1bd0-3d1a-4e46-b74d-11db6867e0d7', '808d5a67-8c38-42f5-9413-8771d8b4ae38', 'Mistcaller', 'Rare', 'UNLOCK', 'M19', 1, 'Creature — Merfolk Wizard', 'U', null, true, 'Building B', 2.0, false),
-    ('1b19cad0-5754-4625-8303-c8310bc7cbd5', 'b77dfe2a-ebc9-46b0-9134-2ecb2abdd8be', 'Mystic Archaeologist', 'Rare', 'UNLOCK', 'M19', 2, 'Creature — Human Wizard', 'U', null, true, 'Building B', 2.0, false),
-    ('949589c4-97bc-46b4-bc6c-4b2709fd5e3a', '43d7fcf3-acc2-4e9b-a466-c73b1b6c58af', 'Omenspeaker', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Human Wizard', 'U', null, true, 'Building B', 5.0, false),
-    ('db534b4e-8bff-4924-baea-9988d195fb25', '730e39e6-c61d-48b5-8827-bfd952bf1be7', 'Omniscience', 'Mythic', 'UNIQUE', 'M19', 10, 'Enchantment', 'U', null, false, 'Building B', 0.1, false),
-    ('17f2aaf5-6c1f-4663-865f-6cdd5640485a', '757eadac-dd29-4a7f-8683-5bc823168326', 'One with the Machine', 'Rare', 'UNLOCK', 'M19', 4, 'Sorcery', 'U', null, true, 'Building B', 2.0, false),
-    ('2256e07f-a35a-4393-9744-045564d5770b', 'df9fe645-6f7b-44a0-ab69-b68cb7e525cd', 'Patient Rebuilding', 'Rare', 'UNLOCK', 'M19', 5, 'Enchantment', 'U', null, true, 'Building B', 2.0, false),
-    ('285d22fa-1623-463a-83c0-a9aa7c969ce2', '328b42f1-d679-4f9c-80e3-38fe3b965d10', 'Psychic Corrosion', 'Uncommon', 'UNLOCK', 'M19', 3, 'Enchantment', 'U', null, true, 'Building B', 4.0, false),
-    ('19316cbb-d1af-4ab7-b588-78637503e986', '52241b9c-7a69-4176-9234-8bdab09d8e64', 'Sai, Master Thopterist', 'Rare', 'UNLOCK', 'M19', 3, 'Legendary Creature — Human Artificer', 'U', null, true, 'Building B', 2.0, true),
-    ('3a55f484-5734-469c-8d41-95ce44473ec1', '3e400e13-6cae-45e6-b5cc-5b5f9d74dec5', 'Salvager of Secrets', 'Common', 'UNLIMITED', 'M19', 5, 'Creature — Merfolk Wizard', 'U', null, true, 'Building B', 5.0, false),
-    ('cb4664d4-fb00-4572-a60d-00336117b8a5', '0753aee4-33db-48c5-9854-16a9d91535b2', 'Scholar of Stars', 'Common', 'UNLIMITED', 'M19', 4, 'Creature — Human Artificer', 'U', null, true, 'Building B', 5.0, false),
-    ('46588683-74c7-4041-a43b-95d51ba51a94', '6e060984-2015-4dc4-b53d-ab6bf2abdacc', 'Sift', 'Uncommon', 'UNLOCK', 'M19', 4, 'Sorcery', 'U', null, true, 'Building B', 4.0, false),
-    ('586d5000-1fdb-4bfe-aa34-63b25ee94bb9', '6e51a0b2-e07f-4c9d-b055-dd1dcd2e29d4', 'Skilled Animator', 'Uncommon', 'UNLOCK', 'M19', 3, 'Creature — Human Artificer', 'U', null, true, 'Building B', 4.0, false),
-    ('e0c53e64-69cf-4296-8a1e-f8817f25c0b4', '9b93ff69-f195-4d72-8e1d-574c3e53bca8', 'Sleep', 'Uncommon', 'UNLOCK', 'M19', 4, 'Sorcery', 'U', null, true, 'Building B', 4.0, false),
-    ('2f6b6cbc-b25c-4221-ae65-a29fcf504f2f', 'e15060c3-3773-4548-8747-ff59dcf2b519', 'Snapping Drake', 'Common', 'UNLIMITED', 'M19', 4, 'Creature — Drake', 'U', null, true, 'Building B', 5.0, false),
-    ('5d65c22b-7640-4433-930b-4bc381ac7361', '9c5f4d02-eedb-4c6c-9f13-1b7a45382483', 'Supreme Phantom', 'Rare', 'UNLOCK', 'M19', 2, 'Creature — Spirit', 'U', null, true, 'Building B', 2.0, false),
-    ('9002d0f1-ff2c-4d1c-a7db-3252ef6bebbd', '8342de86-5b11-486d-8012-f0f9d2ded8c4', 'Surge Mare', 'Uncommon', 'UNLOCK', 'M19', 2, 'Creature — Horse Fish', 'U', null, true, 'Building B', 4.0, false),
-    ('9d3d062c-5853-44f9-b951-a264e9e0d72d', '68227969-39cf-42cf-b3b8-cf8a04647d7e', 'Switcheroo', 'Uncommon', 'UNLOCK', 'M19', 5, 'Sorcery', 'U', null, true, 'Building B', 4.0, false),
-    ('e5e12371-f05c-41cf-92ca-7cb17c2f7f1a', 'e22824cf-07a1-4c83-b6c4-9d8fcff3892f', 'Tezzeret, Artifice Master', 'Mythic', 'UNIQUE', 'M19', 5, 'Legendary Planeswalker — Tezzeret', 'U', null, false, 'Building B', 0.1, false),
-    ('2eda67da-02b5-4ecb-9038-10e026d454ec', '8a268636-75d5-4631-8272-8b001f569db5', 'Tolarian Scholar', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Human Wizard', 'U', null, true, 'Building B', 5.0, false),
-    ('05f0b6ce-eb70-4f42-9360-c7d09f48a5c5', 'e0462a2c-fb88-495f-813b-6476ee3e62bb', 'Totally Lost', 'Common', 'UNLIMITED', 'M19', 5, 'Instant', 'U', null, true, 'Building B', 5.0, false),
-    ('8f12d70b-fff7-4d0c-982e-2fea70018a78', 'd6596336-8177-4475-95b9-a21858563276', 'Uncomfortable Chill', 'Common', 'UNLIMITED', 'M19', 3, 'Instant', 'U', null, true, 'Building B', 5.0, false),
-    ('4fb995c8-1bc2-4ff4-b8e9-f9b6bc0de0fe', 'b2ca8824-6bd8-4aa3-b156-618118eb98a4', 'Wall of Mist', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Wall', 'U', null, true, 'Building B', 5.0, false),
-    ('a5964daa-2f9e-4a4b-a091-91e7adc3e9c3', '5e038a3a-fbab-46c2-8773-1327d953da16', 'Windreader Sphinx', 'Rare', 'UNLOCK', 'M19', 7, 'Creature — Sphinx', 'U', null, true, 'Building B', 2.0, false),
-    ('de2de2bd-9ba7-4b6f-94c2-dafb2011a48e', 'edbf1b87-2d1e-47e6-a04e-a2b1646af7d9', 'Abnormal Endurance', 'Common', 'UNLIMITED', 'M19', 2, 'Instant', 'B', null, true, 'Library', 5.0, false),
-    ('6fe72bd9-825e-4451-9314-826882f75c85', 'c1cf9d74-e700-456a-9e5a-1c4df22db268', 'Blood Divination', 'Uncommon', 'UNLOCK', 'M19', 4, 'Sorcery', 'B', null, true, 'Library', 4.0, false),
-    ('05145a8d-0bfb-4f07-87cf-65875310bdb4', '7c2f1915-8d91-47c6-bab4-be325348673a', 'Bogstomper', 'Common', 'UNLIMITED', 'M19', 6, 'Creature — Beast', 'B', null, true, 'Library', 5.0, false),
-    ('08a0de62-6e9f-4ee9-9d8d-ee6f6a115307', '51926430-b98a-424d-9347-c36938132825', 'Bone Dragon', 'Mythic', 'UNIQUE', 'M19', 5, 'Creature — Dragon Skeleton', 'B', null, false, 'Library', 0.1, false),
-    ('3867704d-d2ef-4185-b53d-84eba6a6776f', 'c650a7bc-e350-44a0-a698-d4a233d66156', 'Child of Night', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Vampire', 'B', null, true, 'Library', 5.0, false),
-    ('c9699446-b6f5-4e6a-a263-059cbf6e4b7e', '99024aa8-5687-4d38-8a4b-feef42d6c1ff', 'Death Baron', 'Rare', 'UNLOCK', 'M19', 3, 'Creature — Zombie Wizard', 'B', null, true, 'Library', 2.0, false),
-    ('d50f9563-7bf8-4c3c-ac82-327221e56551', '2e0b838d-c858-4aa5-999e-c4ef9d29571b', 'Demon of Catastrophes', 'Rare', 'UNLOCK', 'M19', 4, 'Creature — Demon', 'B', null, true, 'Library', 2.0, false),
-    ('5cf2d355-404e-4c21-9bc2-973d09a845a5', '6048fc70-0dcc-4b54-977d-16e240225f82', 'Diregraf Ghoul', 'Uncommon', 'UNLOCK', 'M19', 1, 'Creature — Zombie', 'B', null, true, 'Library', 4.0, false),
-    ('a1f70ee8-7e59-43d6-a7b2-29cb5cd1d8b3', '11cb509d-21af-48f1-b355-135ebd3e4bd1', 'Doomed Dissenter', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Human', 'B', null, true, 'Library', 5.0, false),
-    ('b433b9fc-69fc-4a57-a16b-f1afd3033b56', '33d405ea-7a9a-4970-b70f-9c05d90dd6f0', 'Duress', 'Common', 'UNLIMITED', 'M19', 1, 'Sorcery', 'B', null, true, 'Library', 5.0, false),
-    ('40b03528-f4ec-4825-ba4c-c485cb4eab3a', 'bdb319a6-a1cd-44f5-999d-af1bb55b2fc4', 'Epicure of Blood', 'Common', 'UNLIMITED', 'M19', 5, 'Creature — Vampire', 'B', null, true, 'Library', 5.0, false),
-    ('e8cb52a4-5fec-41a0-8030-503a61e3d33e', 'd655a1c9-b84d-4069-a2ca-3aa0dacab3e1', 'Fell Specter', 'Uncommon', 'UNLOCK', 'M19', 4, 'Creature — Specter', 'B', null, true, 'Library', 4.0, false),
-    ('f0fa0ad8-854a-4b4e-9f87-e1dfaa11253c', '3b00068d-ad07-417c-bbb3-5f980615fb06', 'Fraying Omnipotence', 'Rare', 'UNLOCK', 'M19', 5, 'Sorcery', 'B', null, true, 'Library', 2.0, false),
-    ('3c6d2a84-5e47-4f7a-83f7-ee4e670980c7', '1a2030cc-d7ee-4059-b2d7-fb95ea8e267b', 'Gravedigger', 'Uncommon', 'UNLOCK', 'M19', 4, 'Creature — Zombie', 'B', null, true, 'Library', 4.0, false),
-    ('4dc5f62c-2d29-4a94-8501-13dc6a93c5a1', '216c5a72-ef87-4ada-bf52-437e50874be5', 'Graveyard Marshal', 'Rare', 'UNLOCK', 'M19', 2, 'Creature — Zombie Soldier', 'B', null, true, 'Library', 2.0, false),
-    ('7624c9aa-2f47-4fcc-a9fe-cc843e8de053', 'fed32c9c-7458-4143-b0b2-45ca23ba25ee', 'Hired Blade', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Human Assassin', 'B', null, true, 'Library', 5.0, false),
-    ('d17aaa92-10ca-4f70-b45e-5a51e9192efb', '0931206b-eed2-40d0-9496-5ecefc7f8f90', 'Infectious Horror', 'Common', 'UNLIMITED', 'M19', 4, 'Creature — Zombie Horror', 'B', null, true, 'Library', 5.0, false),
-    ('4e291f27-d74f-48e7-bcb4-ddcc558c2211', '32aa920c-0d91-4bc9-803c-d13857688d10', 'Infernal Reckoning', 'Rare', 'UNLOCK', 'M19', 1, 'Instant', 'B', null, true, 'Library', 2.0, false),
-    ('9cf7ff14-0de8-4ef9-8425-df15629adc4b', '3fc640dd-6292-4d36-82fb-bd366bc00bd3', 'Infernal Scarring', 'Common', 'UNLIMITED', 'M19', 2, 'Enchantment — Aura', 'B', null, true, 'Library', 5.0, false),
-    ('74e49567-8ad6-4ce9-a55d-4db5e0fd9532', '7af0e2da-9163-42d9-bf69-439cc61cd28d', 'Isareth the Awakener', 'Rare', 'UNLOCK', 'M19', 3, 'Legendary Creature — Human Wizard', 'B', null, true, 'Library', 2.0, true),
-    ('32bd3acd-aa62-4708-9336-e3430fd0e541', '01b3af6d-ab7d-4137-a94a-1cf2cbfd9d44', 'Lich''s Caress', 'Common', 'UNLIMITED', 'M19', 5, 'Sorcery', 'B', null, true, 'Library', 5.0, false),
-    ('a7939170-f84e-44c6-b8bc-a180cf7f85d9', '4f66489c-5a19-40ad-9126-461fa8231f1b', 'Liliana, Untouched by Death', 'Mythic', 'UNIQUE', 'M19', 4, 'Legendary Planeswalker — Liliana', 'B', null, false, 'Library', 0.1, false),
-    ('750e6246-c28d-46ed-9966-26706f6d3172', '6858702a-e563-4dcb-a50d-65406cea7c86', 'Liliana''s Contract', 'Rare', 'UNLOCK', 'M19', 5, 'Enchantment', 'B', null, true, 'Library', 2.0, false),
-    ('f49d5f95-c8a8-4d65-9546-26c2113db817', 'cf75dbd8-b65a-48d9-b96b-4afb43f336d1', 'Macabre Waltz', 'Common', 'UNLIMITED', 'M19', 2, 'Sorcery', 'B', null, true, 'Library', 5.0, false),
-    ('8423f50f-add7-4502-9ac0-8de1ccb2603d', 'ad44cf74-b717-48fb-9fa2-77512024d76a', 'Mind Rot', 'Common', 'UNLIMITED', 'M19', 3, 'Sorcery', 'B', null, true, 'Library', 5.0, false),
-    ('45368bf3-d5e9-43e6-a67d-93c2e93acc72', '938b4e2c-88d9-4637-bc00-e228920c9a78', 'Murder', 'Uncommon', 'UNLOCK', 'M19', 3, 'Instant', 'B', null, true, 'Library', 4.0, false),
-    ('f12efbc0-ce88-4622-ad07-2808e651ac5a', '9ecf56b9-1f36-4030-8333-1675ccc663d9', 'Nightmare''s Thirst', 'Uncommon', 'UNLOCK', 'M19', 1, 'Instant', 'B', null, true, 'Library', 4.0, false),
-    ('9ced1022-abd9-4e22-a4f2-fef738295224', '28778958-a1f9-4fea-b551-c193d1257f18', 'Open the Graves', 'Rare', 'UNLOCK', 'M19', 5, 'Enchantment', 'B', null, true, 'Library', 2.0, false),
-    ('a6e359c3-2a18-4240-b38a-216372161cd8', '520c4d88-34b6-4a26-81ca-65eb8b10461c', 'Phylactery Lich', 'Rare', 'UNLOCK', 'M19', 3, 'Creature — Zombie', 'B', null, true, 'Library', 2.0, false),
-    ('995596a3-343d-4272-86bf-d76fd32ab78e', '4cd096ac-dd67-4208-a3ad-8e6061b442c6', 'Plague Mare', 'Uncommon', 'UNLOCK', 'M19', 3, 'Creature — Nightmare Horse', 'B', null, true, 'Library', 4.0, false),
-    ('676ec702-75c4-4733-b500-eb15406778bb', 'e9ccec56-ec2b-4ab8-b929-6e4795711db9', 'Ravenous Harpy', 'Uncommon', 'UNLOCK', 'M19', 3, 'Creature — Harpy', 'B', null, true, 'Library', 4.0, false),
-    ('a3d4ac21-2203-45f4-b5f2-dc186ccdbe69', '9dbc3530-b278-4c8d-b2cc-a09dfac9d5e5', 'Reassembling Skeleton', 'Uncommon', 'UNLOCK', 'M19', 2, 'Creature — Skeleton Warrior', 'B', null, true, 'Library', 4.0, false),
-    ('bc73644e-884c-47cd-aeec-ab80360dd5ae', '4e769107-0f32-4181-9e57-ffebc2228d3a', 'Rise from the Grave', 'Uncommon', 'UNLOCK', 'M19', 5, 'Sorcery', 'B', null, true, 'Library', 4.0, false),
-    ('8fee5cc4-a686-4ce6-aa6b-1b8a88e6dea3', '3792763c-7aa0-4055-b8a1-3257e0443ef1', 'Skeleton Archer', 'Common', 'UNLIMITED', 'M19', 4, 'Creature — Skeleton Archer', 'B', null, true, 'Library', 5.0, false),
-    ('2c7f2740-a193-4b4c-af00-2dd22d74a4ba', '41684707-5118-45cf-892d-46b66045d026', 'Skymarch Bloodletter', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Vampire Soldier', 'B', null, true, 'Library', 5.0, false),
-    ('5326d251-bb91-4653-b1fa-44f14c4e0b88', '13718d93-fe46-4a18-a511-88649ef1c9de', 'Sovereign''s Bite', 'Common', 'UNLIMITED', 'M19', 2, 'Sorcery', 'B', null, true, 'Library', 5.0, false),
-    ('2b737126-50b5-4678-91bf-197b64086fe4', '7fd61a18-6e4f-40c5-aa00-3d101ec1ec82', 'Stitcher''s Supplier', 'Uncommon', 'UNLOCK', 'M19', 1, 'Creature — Zombie', 'B', null, true, 'Library', 4.0, false),
-    ('300468ab-fbae-42ae-97bc-b08f795efa5c', '444493a6-0f90-4847-9619-4ea8fbf7cf6f', 'Strangling Spores', 'Common', 'UNLIMITED', 'M19', 4, 'Instant', 'B', null, true, 'Library', 5.0, false),
-    ('2cc5760e-8b27-4d37-9772-c9eda90b1d95', '7e280770-9a8f-4445-84d2-3b9cac659136', 'Two-Headed Zombie', 'Common', 'UNLIMITED', 'M19', 4, 'Creature — Zombie', 'B', null, true, 'Library', 5.0, false),
-    ('167822a5-2ab5-42f5-afa4-562fe2d7501b', 'c0045925-25bf-403c-b721-5f05ba30985b', 'Vampire Neonate', 'Common', 'UNLIMITED', 'M19', 1, 'Creature — Vampire', 'B', null, true, 'Library', 5.0, false),
-    ('ee338221-ead9-4b89-8b0c-12745c4ca13d', '49c7b7c6-c8dc-4871-9103-b057d2034c3e', 'Vampire Sovereign', 'Uncommon', 'UNLOCK', 'M19', 5, 'Creature — Vampire Noble', 'B', null, true, 'Library', 4.0, false),
-    ('344a26ab-524f-4daa-ae0a-9d94e34c96df', 'fea95888-e16a-4209-9cd4-623f7f4d2f67', 'Walking Corpse', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Zombie', 'B', null, true, 'Library', 5.0, false),
-    ('9160dde8-cd77-4967-a5f3-a676376c58f7', '9d08af23-9f4a-4097-9abc-3b17475ab744', 'Act of Treason', 'Common', 'UNLIMITED', 'M19', 3, 'Sorcery', 'R', null, true, 'Gym', 5.0, false),
-    ('2435c810-2baf-4e3b-80ce-542b94694901', '8b46b50c-f824-4c4e-86de-38065c6f9a64', 'Alpine Moon', 'Rare', 'UNLOCK', 'M19', 1, 'Enchantment', 'R', null, true, 'Gym', 2.0, false),
-    ('c827bccf-38f9-4a7c-bd0e-038594a9f63b', 'd06eedb4-bd5a-4864-9505-a570a745d165', 'Apex of Power', 'Mythic', 'UNIQUE', 'M19', 10, 'Sorcery', 'R', null, false, 'Gym', 0.1, false),
-    ('5b012532-1186-4dc8-9d42-867e418b0280', '5eff8a06-e0d6-435a-a7c0-db9f9d98636a', 'Banefire', 'Rare', 'UNLOCK', 'M19', 1, 'Sorcery', 'R', null, true, 'Gym', 2.0, false),
-    ('32b7438d-e905-4627-9299-e2224377c8e7', '880793a2-84b0-4ae1-9bb8-6e942e3dc723', 'Boggart Brute', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Goblin Warrior', 'R', null, true, 'Gym', 5.0, false),
-    ('e83a678b-19d4-47a5-aa1c-c2437e5009c0', '7779525d-080d-4669-bb65-af532bf0983e', 'Catalyst Elemental', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Elemental', 'R', null, true, 'Gym', 5.0, false),
-    ('a9737a83-8c58-44b5-816e-d8df8a577921', '41c15160-ee8c-42e3-bc6c-593b8c8ae335', 'Crash Through', 'Common', 'UNLIMITED', 'M19', 1, 'Sorcery', 'R', null, true, 'Gym', 5.0, false),
-    ('69a57bfc-1de2-4b3a-84bc-19ec41087f0d', '17917b7a-2b2b-4a96-a21e-10cd91375660', 'Dark-Dweller Oracle', 'Rare', 'UNLOCK', 'M19', 2, 'Creature — Goblin Shaman', 'R', null, true, 'Gym', 2.0, false),
-    ('31b73282-6207-4207-8b9c-86a8f9a263a2', 'c8f1e3bd-bbf0-4750-b054-03553fc61850', 'Demanding Dragon', 'Rare', 'UNLOCK', 'M19', 5, 'Creature — Dragon', 'R', null, true, 'Gym', 2.0, false),
-    ('a0d0a9fa-75c9-4492-accd-bc9f79407453', 'f040310d-d6ac-4d77-9f76-ca325eddf306', 'Dismissive Pyromancer', 'Rare', 'UNLOCK', 'M19', 2, 'Creature — Human Wizard', 'R', null, true, 'Gym', 2.0, false),
-    ('be8875d8-fe8c-4721-aa8d-978bf72e9c26', '946675f5-8998-4f1b-934b-85ffe6e2f002', 'Doublecast', 'Uncommon', 'UNLOCK', 'M19', 2, 'Sorcery', 'R', null, true, 'Gym', 4.0, false),
-    ('d330ce5b-de86-42ad-ac00-3ae1d3252956', '8f561498-66e7-4cbf-8cb9-e6fd4717993d', 'Dragon Egg', 'Uncommon', 'UNLOCK', 'M19', 3, 'Creature — Dragon Egg', 'R', null, true, 'Gym', 4.0, false),
-    ('60bee89d-d916-4095-830f-6270f8c4f0d8', 'da952213-9a3c-4e13-bc5a-55d1e5dbaa5b', 'Electrify', 'Common', 'UNLIMITED', 'M19', 4, 'Instant', 'R', null, true, 'Gym', 5.0, false),
-    ('3e38127d-63af-4d26-9ff5-358c8a61f39c', 'afa3eb61-624c-4abe-bf1e-58fa3b4c14a6', 'Fiery Finish', 'Uncommon', 'UNLOCK', 'M19', 6, 'Sorcery', 'R', null, true, 'Gym', 4.0, false),
-    ('fcca2f76-3db9-472b-b78e-a87b81e31d0a', '3912d21e-1ebc-4a81-9dc9-f404248d564a', 'Fire Elemental', 'Common', 'UNLIMITED', 'M19', 5, 'Creature — Elemental', 'R', null, true, 'Gym', 5.0, false),
-    ('90cef94d-d941-4e08-afec-a116626b74fb', '8b022754-6d16-470e-b754-4df6e4f4709e', 'Goblin Instigator', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Goblin Rogue', 'R', null, true, 'Gym', 5.0, false),
-    ('94b3a4fb-9024-45ef-a54b-cf3a9fa5b9c2', 'df67597f-42a8-4fa7-b426-d7db8b384445', 'Goblin Motivator', 'Common', 'UNLIMITED', 'M19', 1, 'Creature — Goblin Warrior', 'R', null, true, 'Gym', 5.0, false),
-    ('2bc69988-3c2d-4b76-a8c0-05926b9bbd08', '0283bf5e-ddf2-4a4a-a7cf-d3e27eed7e7d', 'Goblin Trashmaster', 'Rare', 'UNLOCK', 'M19', 4, 'Creature — Goblin Warrior', 'R', null, true, 'Gym', 2.0, false),
-    ('bbc0f3e7-a287-4624-8266-ca617448fcaa', 'c6bdaf76-6a03-4695-9c4b-f040e73435af', 'Guttersnipe', 'Uncommon', 'UNLOCK', 'M19', 3, 'Creature — Goblin Shaman', 'R', null, true, 'Gym', 4.0, false),
-    ('2f003678-0f17-4f1d-87d5-83613a82044b', 'be1c2607-091a-41e7-ae4c-73c7e5689739', 'Havoc Devils', 'Common', 'UNLIMITED', 'M19', 4, 'Creature — Devil', 'R', null, true, 'Gym', 5.0, false),
-    ('ad6d0a11-3a9c-4de0-9a46-06d2b9356eb7', 'e050a0a3-f48e-4cba-9cd4-692a92261c9f', 'Hostile Minotaur', 'Common', 'UNLIMITED', 'M19', 4, 'Creature — Minotaur', 'R', null, true, 'Gym', 5.0, false),
-    ('9cd11004-5b8f-4c71-bde0-eb75eed869b0', '68c88a4c-8c2b-4e6f-b835-7e269eb073c8', 'Inferno Hellion', 'Uncommon', 'UNLOCK', 'M19', 4, 'Creature — Hellion', 'R', null, true, 'Gym', 4.0, false),
-    ('54a4c37d-5eeb-42c9-9688-c2ed0d5044cd', '15fef45d-f1a9-49b2-abaa-fe77bb9d1afd', 'Lathliss, Dragon Queen', 'Rare', 'UNLOCK', 'M19', 6, 'Legendary Creature — Dragon', 'R', null, true, 'Gym', 2.0, true),
-    ('c3dab325-8f4f-4288-9f3f-960e52b4335b', '387b6b07-a283-412d-94c3-f7f1dc76e858', 'Lava Axe', 'Common', 'UNLIMITED', 'M19', 5, 'Sorcery', 'R', null, true, 'Gym', 5.0, false),
-    ('2ca822a3-4793-4cbc-a2f3-f43985e7ce8f', '7c7948c6-5144-4df0-8e33-117710ae00af', 'Lightning Mare', 'Uncommon', 'UNLOCK', 'M19', 2, 'Creature — Elemental Horse', 'R', null, true, 'Gym', 4.0, false),
-    ('084b7337-c06f-4cbf-8fc0-0b20c221f1dc', 'f34b9bc4-7bfe-47fd-ba23-4eeeb46026eb', 'Lightning Strike', 'Uncommon', 'UNLOCK', 'M19', 2, 'Instant', 'R', null, true, 'Gym', 4.0, false),
-    ('9e016da6-8800-47b4-9b96-1887677c795c', 'fa10cacb-ab14-447a-b411-9d74bc3772fb', 'Onakke Ogre', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Ogre Warrior', 'R', null, true, 'Gym', 5.0, false),
-    ('3553a70e-75de-4a8c-9b20-92cd4a317101', '074cbe14-a0c8-4772-955a-b4052333d6ce', 'Sarkhan, Fireblood', 'Mythic', 'UNIQUE', 'M19', 3, 'Legendary Planeswalker — Sarkhan', 'R', null, false, 'Gym', 0.1, false),
-    ('edfa8c8c-8013-46d5-8e80-3d9285fe81c8', 'c27c9514-7b5a-461a-a109-f8abafd83523', 'Sarkhan''s Unsealing', 'Rare', 'UNLOCK', 'M19', 4, 'Enchantment', 'R', null, true, 'Gym', 2.0, false),
-    ('bf5a0e1e-5239-41f3-a63f-d9303b1b01fc', 'a9d288b8-cdc1-4e55-a0c9-d6edfc95e65d', 'Shock', 'Common', 'UNLIMITED', 'M19', 1, 'Instant', 'R', null, true, 'Gym', 5.0, false),
-    ('ede2b911-8eec-4993-ab1c-59b55dfb11b4', 'fcd281e3-f336-449f-a887-4b98dc14dfe7', 'Siegebreaker Giant', 'Uncommon', 'UNLOCK', 'M19', 5, 'Creature — Giant Warrior', 'R', null, true, 'Gym', 4.0, false),
-    ('9a13293d-89a7-400c-8309-9f62eeb4769c', 'b5f4b732-099c-46e7-a03d-d8e4c78245b8', 'Smelt', 'Common', 'UNLIMITED', 'M19', 1, 'Instant', 'R', null, true, 'Gym', 5.0, false),
-    ('bc0dbc86-cc12-49e7-9721-dd52b35efcbe', '1817acd5-5ed0-47b8-8e56-4715a488867e', 'Sparktongue Dragon', 'Common', 'UNLIMITED', 'M19', 5, 'Creature — Dragon', 'R', null, true, 'Gym', 5.0, false),
-    ('94df6198-10c0-44e7-8226-dc96d12957c4', 'f63278e0-3c67-421d-87ce-67725e5e74df', 'Spit Flame', 'Rare', 'UNLOCK', 'M19', 3, 'Instant', 'R', null, true, 'Gym', 2.0, false),
-    ('1e618ab0-b092-499c-b5e9-d374433ff19c', 'fb694e7e-f66e-4958-b6ed-aa74bc9ac43e', 'Sure Strike', 'Common', 'UNLIMITED', 'M19', 2, 'Instant', 'R', null, true, 'Gym', 5.0, false),
-    ('31b4db74-0c34-442f-a3f9-38194a75ef7b', 'b94fcdd2-7e50-439c-b5eb-aaa9ec7dee08', 'Tectonic Rift', 'Uncommon', 'UNLOCK', 'M19', 4, 'Sorcery', 'R', null, true, 'Gym', 4.0, false),
-    ('11bed78a-c579-424a-8fcc-322ce2630dbc', '5d2a9859-1353-4431-9343-f5999450acd1', 'Thud', 'Uncommon', 'UNLOCK', 'M19', 1, 'Sorcery', 'R', null, true, 'Gym', 4.0, false),
-    ('48dbbc83-5549-480f-bf98-da90495d2a29', 'f307b5b4-e949-4f69-8dc7-856e33a45a16', 'Tormenting Voice', 'Common', 'UNLIMITED', 'M19', 2, 'Sorcery', 'R', null, true, 'Gym', 5.0, false),
-    ('c676a5b0-bd46-46b3-b71b-a50b86c9b0bd', 'd3b408e7-4d39-47a3-b00c-846903f8ae77', 'Trumpet Blast', 'Common', 'UNLIMITED', 'M19', 3, 'Instant', 'R', null, true, 'Gym', 5.0, false),
-    ('a82fdb2f-b199-44ff-9615-90fc074cb8b0', '5e78e6e0-60f0-4c3c-b8dd-bd673f5152b8', 'Viashino Pyromancer', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Lizard Wizard', 'R', null, true, 'Gym', 5.0, false),
-    ('ade02a6b-0025-418b-8e20-0eb538fd66b1', '994db177-03f5-43dd-bf7b-2994e8d430d3', 'Volcanic Dragon', 'Uncommon', 'UNLOCK', 'M19', 6, 'Creature — Dragon', 'R', null, true, 'Gym', 4.0, false),
-    ('164960fc-6e80-4a53-90d7-5a18c0a28083', 'bf4268e6-170a-445b-b215-718f7494ae28', 'Volley Veteran', 'Uncommon', 'UNLOCK', 'M19', 4, 'Creature — Goblin Warrior', 'R', null, true, 'Gym', 4.0, false),
-    ('1b01d243-9f68-47c7-980b-1418e5f2f3e9', '80ea56ad-e741-4a85-b4e8-ce62e7d593d5', 'Blanchwood Armor', 'Uncommon', 'UNLOCK', 'M19', 3, 'Enchantment — Aura', 'G', null, true, 'Engineering', 4.0, false),
-    ('999030b2-2f91-4c45-981f-acdbbf9034af', 'f4aed3d2-04f5-49a4-a6be-d3cf097903f8', 'Bristling Boar', 'Common', 'UNLIMITED', 'M19', 4, 'Creature — Boar', 'G', null, true, 'Engineering', 5.0, false),
-    ('bae6eb55-4bf9-4418-b667-a9a761f91ef9', '2f5bf099-2e01-4e1c-9ebf-0ce0ac66939e', 'Centaur Courser', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Centaur Warrior', 'G', null, true, 'Engineering', 5.0, false),
-    ('80d4ce4f-8255-419b-9e7f-544d9798e5c8', '08c7db90-c0cf-4482-b7ee-bb033e5996d2', 'Colossal Dreadmaw', 'Common', 'UNLIMITED', 'M19', 6, 'Creature — Dinosaur', 'G', null, true, 'Engineering', 5.0, false),
-    ('93f99796-ddc5-4ccd-b925-35622a8648b8', 'cac95494-0db0-4bec-8665-998431a6f76b', 'Colossal Majesty', 'Uncommon', 'UNLOCK', 'M19', 3, 'Enchantment', 'G', null, true, 'Engineering', 4.0, false),
-    ('7bc8325b-c7a8-49a5-8a54-a419800ffb93', 'ea4d30c7-7c39-46d5-9b71-a7ebc3e219a1', 'Daggerback Basilisk', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Basilisk', 'G', null, true, 'Engineering', 5.0, false),
-    ('78271f34-f62e-4771-b430-b121097b8fb6', 'db640c5b-4548-44b1-a9cd-cc6838707dbb', 'Declare Dominance', 'Uncommon', 'UNLOCK', 'M19', 5, 'Sorcery', 'G', null, true, 'Engineering', 4.0, false),
-    ('19ca91ea-dffd-44a9-a54a-c664d83c357b', '06c12fcc-1c08-40a0-a0da-e139c42f083f', 'Druid of Horns', 'Uncommon', 'UNLOCK', 'M19', 4, 'Creature — Human Druid', 'G', null, true, 'Engineering', 4.0, false),
-    ('76ceff1d-9e83-41cc-b54b-8bf90d985da9', 'b1793c3b-25d6-4fae-a99d-cfdd2210ca67', 'Druid of the Cowl', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Elf Druid', 'G', null, true, 'Engineering', 5.0, false),
-    ('30171803-1e7b-430b-a0de-2dfd2f1115ac', '5c43c1d7-1899-45c1-992b-443873890d78', 'Dryad Greenseeker', 'Uncommon', 'UNLOCK', 'M19', 2, 'Creature — Dryad', 'G', null, true, 'Engineering', 4.0, false),
-    ('4da3b0bc-84da-4b85-992b-d0700c97157c', 'a8f5440e-5d4b-420a-8cfd-27a3c72be0d2', 'Elvish Clancaller', 'Rare', 'UNLOCK', 'M19', 2, 'Creature — Elf Druid', 'G', null, true, 'Engineering', 2.0, false),
-    ('d0299b00-b16c-4e7d-b67a-ec160ea81a54', '71d14755-b81d-4aec-b94d-1637884a5844', 'Elvish Rejuvenator', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Elf Druid', 'G', null, true, 'Engineering', 5.0, false),
-    ('d470e441-3520-4669-aaa5-f0c57829352a', 'bdd0d01d-b9f2-4c3f-9b3b-04e122013de5', 'Ghastbark Twins', 'Uncommon', 'UNLOCK', 'M19', 7, 'Creature — Treefolk', 'G', null, true, 'Engineering', 4.0, false),
-    ('06582256-37d4-442d-b452-9cd93d285d2f', '92d5bb7e-08ba-448e-8763-f47c89505e80', 'Ghirapur Guide', 'Uncommon', 'UNLOCK', 'M19', 3, 'Creature — Elf Scout', 'G', null, true, 'Engineering', 4.0, false),
-    ('80996b0d-cd44-445e-96de-677e0018255c', 'e740ce2f-2134-473c-afa1-1b6d2d1e38ef', 'Giant Spider', 'Common', 'UNLIMITED', 'M19', 4, 'Creature — Spider', 'G', null, true, 'Engineering', 5.0, false),
-    ('c0338075-5e84-4a37-957a-9cf23ac261ab', '43a86d36-9653-4498-a533-8b30b919cdbf', 'Gift of Paradise', 'Uncommon', 'UNLOCK', 'M19', 3, 'Enchantment — Aura', 'G', null, true, 'Engineering', 4.0, false),
-    ('c1db84d8-d426-4c0d-b44e-5be7b0f5f5bf', 'e666bae7-dd51-4921-8b89-7e8d423caba0', 'Gigantosaurus', 'Rare', 'UNLOCK', 'M19', 5, 'Creature — Dinosaur', 'G', null, true, 'Engineering', 2.0, false),
-    ('36d4574a-3266-4497-b145-fb25820d8a7f', 'befb211f-37ca-4083-98d4-9ff1f28be3f2', 'Goreclaw, Terror of Qal Sisma', 'Rare', 'UNLOCK', 'M19', 4, 'Legendary Creature — Bear', 'G', null, true, 'Engineering', 2.0, true),
-    ('2eebdd18-6930-42e0-b589-fe15820db6e1', '8178c546-84f8-4563-a804-6489ec016660', 'Greenwood Sentinel', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Elf Scout', 'G', null, true, 'Engineering', 5.0, false),
-    ('4ec59964-42c1-4c29-8c60-37b7f376c347', '0e0d40a6-e0a4-4fb2-be72-314f7d66b7eb', 'Highland Game', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Elk', 'G', null, true, 'Engineering', 5.0, false),
-    ('84127b83-e75a-4f12-92ca-46f50bb89699', 'd1dde190-8124-4590-9507-801ea4c8cde3', 'Hungering Hydra', 'Rare', 'UNLOCK', 'M19', 1, 'Creature — Hydra', 'G', null, true, 'Engineering', 2.0, false),
-    ('390c40ba-2464-44ae-8d67-93c72ab3c425', 'bdb3ca68-ec1f-4e16-81cc-d23f8f52c728', 'Naturalize', 'Common', 'UNLIMITED', 'M19', 2, 'Instant', 'G', null, true, 'Engineering', 5.0, false),
-    ('0bf71f42-6e42-46c0-9e8f-394d2c4519ee', 'b254fefb-11d2-4369-ae5c-0c3bd48ae580', 'Oakenform', 'Common', 'UNLIMITED', 'M19', 3, 'Enchantment — Aura', 'G', null, true, 'Engineering', 5.0, false),
-    ('00906b47-6316-4e00-bbf5-b801ab583f4f', 'd36075c2-de66-4202-9217-b1102a2bc14b', 'Pelakka Wurm', 'Rare', 'UNLOCK', 'M19', 7, 'Creature — Wurm', 'G', null, true, 'Engineering', 2.0, false),
-    ('78a29ddb-fc76-407a-aa58-ec92d011bd44', '85bde6ac-3dd4-4946-8b57-24f57e3eae2b', 'Plummet', 'Common', 'UNLIMITED', 'M19', 2, 'Instant', 'G', null, true, 'Engineering', 5.0, false),
-    ('ba2b0966-4e9e-44dc-9145-3c1e644578bc', '15d63e5d-dc4d-4e5f-8043-78039a49732b', 'Prodigious Growth', 'Rare', 'UNLOCK', 'M19', 6, 'Enchantment — Aura', 'G', null, true, 'Engineering', 2.0, false),
-    ('bbe53385-d63f-4d07-94ed-3ea5a48c79c8', '6d5dc34b-3eea-4b77-8db7-94bc30b14c4c', 'Rabid Bite', 'Common', 'UNLIMITED', 'M19', 2, 'Sorcery', 'G', null, true, 'Engineering', 5.0, false),
-    ('2951026c-69bb-4ffc-a24f-b0795a12aa79', '032ec6e2-6cc3-4a97-9cc7-3233f5e11904', 'Reclamation Sage', 'Uncommon', 'UNLOCK', 'M19', 3, 'Creature — Elf Shaman', 'G', null, true, 'Engineering', 4.0, false),
-    ('f127214f-3e91-4988-b593-1568d0ae1718', '5b38fafb-3999-46dc-928b-1677625c1943', 'Recollect', 'Uncommon', 'UNLOCK', 'M19', 3, 'Sorcery', 'G', null, true, 'Engineering', 4.0, false),
-    ('281f04d5-af45-4494-ac11-a605d3a06643', 'd26d1cce-3bcf-48d4-abce-8b12ca7b7432', 'Rhox Oracle', 'Common', 'UNLIMITED', 'M19', 5, 'Creature — Rhino Monk', 'G', null, true, 'Engineering', 5.0, false),
-    ('76b01fd2-139a-47ed-a8e3-021aa9c91b02', 'cbf743a5-123f-4747-826d-7f8bb929a52c', 'Root Snare', 'Common', 'UNLIMITED', 'M19', 2, 'Instant', 'G', null, true, 'Engineering', 5.0, false),
-    ('b445a0f0-2cca-4223-bd27-940d2cb6d29c', '48e8ae59-a234-498e-9dae-bac8d1424ea5', 'Runic Armasaur', 'Rare', 'UNLOCK', 'M19', 3, 'Creature — Dinosaur', 'G', null, true, 'Engineering', 2.0, false),
-    ('175e21a3-00f7-4c51-8a8e-fbfd7089efda', 'c235015e-a7a9-4f8d-bf4a-cf68b3847f83', 'Scapeshift', 'Mythic', 'UNIQUE', 'M19', 4, 'Sorcery', 'G', null, false, 'Engineering', 0.1, false),
-    ('9ffa2e83-bc78-4bde-9692-e5165c4ef63b', '2ff309e3-90e0-40e7-a277-3df057f8f198', 'Talons of Wildwood', 'Common', 'UNLIMITED', 'M19', 2, 'Enchantment — Aura', 'G', null, true, 'Engineering', 5.0, false),
-    ('0812e942-eb78-48c8-857e-5f0ff1bd777b', '2b761ce6-4fb1-4f22-b51c-d9f25f62b39a', 'Thorn Lieutenant', 'Rare', 'UNLOCK', 'M19', 2, 'Creature — Elf Warrior', 'G', null, true, 'Engineering', 2.0, false),
-    ('fc0f3812-bb6c-4d99-b505-9dfd84e3fd95', 'c5c221e6-dafe-4661-b920-3faed9551802', 'Thornhide Wolves', 'Common', 'UNLIMITED', 'M19', 5, 'Creature — Wolf', 'G', null, true, 'Engineering', 5.0, false),
-    ('fe574e49-723a-409b-9222-125eebb620ff', '61e09dd9-7870-48c2-9177-d6abc3162692', 'Titanic Growth', 'Common', 'UNLIMITED', 'M19', 2, 'Instant', 'G', null, true, 'Engineering', 5.0, false),
-    ('34ad8e5d-0c26-4588-8161-b22197715d63', 'caf1bc69-a8d7-454b-9cc6-2e4d003776a8', 'Vigilant Baloth', 'Uncommon', 'UNLOCK', 'M19', 5, 'Creature — Beast', 'G', null, true, 'Engineering', 4.0, false),
-    ('b9980835-cd32-4870-88df-c79cd5534968', '499c7ee3-08a3-4f40-809a-3f7087ab9b24', 'Vine Mare', 'Uncommon', 'UNLOCK', 'M19', 4, 'Creature — Elemental Horse', 'G', null, true, 'Engineering', 4.0, false),
-    ('681fbd66-b622-4f20-a860-f101aff21109', 'b5f20a6d-8c3e-452f-9d98-4886f0fa052a', 'Vivien Reid', 'Mythic', 'UNIQUE', 'M19', 5, 'Legendary Planeswalker — Vivien', 'G', null, false, 'Engineering', 0.1, false),
-    ('784c4711-223d-4b95-a163-87e57f87b8db', '5e2b30d2-81e9-40cd-86dd-3ec5dd06ced0', 'Vivien''s Invocation', 'Rare', 'UNLOCK', 'M19', 7, 'Sorcery', 'G', null, true, 'Engineering', 2.0, false),
-    ('7327e768-d90d-4677-b4dd-10837ffe8be2', '51ce0158-c9a5-4fa5-9704-46ab02f01b86', 'Wall of Vines', 'Common', 'UNLIMITED', 'M19', 1, 'Creature — Plant Wall', 'G', null, true, 'Engineering', 5.0, false),
-    ('5314bae2-4930-4f8a-8a52-853bc3feb88f', '27f5969e-d613-4cbc-87af-98899bb5c58a', 'Aerial Engineer', 'Uncommon', 'UNLOCK', 'M19', 4, 'Creature — Human Artificer', 'WU', null, true, 'Library', 4.0, false),
-    ('1e90c638-d4b2-4243-bbc4-1cc10516c40f', 'e7fc5ad6-f2f0-4b06-a61b-05022db9d93b', 'Arcades, the Strategist', 'Mythic', 'UNIQUE', 'M19', 4, 'Legendary Creature — Elder Dragon', 'WUG', null, false, 'Library', 0.1, true),
-    ('38b9f9d7-a00d-4a90-9d7a-88ece10af328', '0156bfbc-26bc-4699-a7ff-437f7c043716', 'Brawl-Bash Ogre', 'Uncommon', 'UNLOCK', 'M19', 4, 'Creature — Ogre Warrior', 'BR', null, true, 'Library', 4.0, false),
-    ('50c1de2c-1acc-47c8-9b5e-a9dae3da8a49', '58d8ff36-4a4d-40e0-b812-3d23b2c7606a', 'Chromium, the Mutable', 'Mythic', 'UNIQUE', 'M19', 7, 'Legendary Creature — Elder Dragon', 'WUB', null, false, 'Library', 0.1, true),
-    ('a353510a-30de-4891-97b9-d7d556531c41', '781cee5f-f9cb-42ed-b408-543d297bf96d', 'Draconic Disciple', 'Uncommon', 'UNLOCK', 'M19', 3, 'Creature — Human Shaman', 'RG', null, true, 'Gym', 4.0, false),
-    ('6e0def77-3528-40fb-a6b2-c3d1e31ade65', '62007675-8a0d-4211-83b2-0daf3641dedc', 'Enigma Drake', 'Uncommon', 'UNLOCK', 'M19', 3, 'Creature — Drake', 'UR', null, true, 'Building B', 4.0, false),
-    ('33c35bf8-ae43-41aa-aae9-4d7513f9058c', 'c442e8b0-a0a4-4839-8049-125b91b15c99', 'Heroic Reinforcements', 'Uncommon', 'UNLOCK', 'M19', 4, 'Sorcery', 'WR', null, true, 'Library', 4.0, false),
-    ('7b215968-93a6-4278-ac61-4e3e8c3c3943', '55e4b27e-5447-4fc2-8cae-a03e344600c6', 'Nicol Bolas, the Ravager', 'Mythic', 'UNIQUE', 'M19', 4, 'Legendary Creature — Elder Dragon', 'UBR', null, false, 'Building B', 0.1, true),
-    ('4663bd13-243e-4b8c-9ca8-158576b58803', '4c2b10ba-1930-4da8-9570-c89b2e239e3e', 'Palladia-Mors, the Ruiner', 'Mythic', 'UNIQUE', 'M19', 6, 'Legendary Creature — Elder Dragon', 'WRG', null, false, 'Library', 0.1, true),
-    ('5e058ff8-043c-498b-8310-0ca45466ac27', 'd0e810bb-5f38-4045-a718-30d423c05659', 'Poison-Tip Archer', 'Uncommon', 'UNLOCK', 'M19', 4, 'Creature — Elf Archer', 'BG', null, true, 'Library', 4.0, false),
-    ('3188e533-9a72-4a02-b169-a918f7c095ba', '34439fb2-0272-4624-aa4c-9ea439b60489', 'Psychic Symbiont', 'Uncommon', 'UNLOCK', 'M19', 6, 'Creature — Nightmare Horror', 'UB', null, true, 'Building B', 4.0, false),
-    ('65a75d3a-58cb-4ee0-88d3-52099cb57ac3', 'ce9d3382-23ca-4d35-ad30-5e2b75517012', 'Regal Bloodlord', 'Uncommon', 'UNLOCK', 'M19', 5, 'Creature — Vampire Soldier', 'WB', null, true, 'Library', 4.0, false),
-    ('e31c544f-a748-4180-8366-9bb1622bb99d', 'aa321138-b1a7-4b8e-a2ca-b9ce65704e92', 'Satyr Enchanter', 'Uncommon', 'UNLOCK', 'M19', 3, 'Creature — Satyr Druid', 'WG', null, true, 'Library', 4.0, false),
-    ('650461af-081b-4cc9-a140-865a666f1443', '104386d9-93b4-4a18-86d5-68718b474f4a', 'Skyrider Patrol', 'Uncommon', 'UNLOCK', 'M19', 4, 'Creature — Elf Scout', 'UG', null, true, 'Building B', 4.0, false),
-    ('d19fdc00-21eb-48dc-966a-6b634dc5a2c4', 'c42ce2e9-4dfe-468a-8f41-49e187cb91d4', 'Vaevictis Asmadi, the Dire', 'Mythic', 'UNIQUE', 'M19', 6, 'Legendary Creature — Elder Dragon', 'BRG', null, false, 'Library', 0.1, true),
-    ('d45ac8dc-281f-4257-9658-80af65a0295b', '98709d61-4da4-4d3a-a654-bb2a7a0edb6b', 'Amulet of Safekeeping', 'Rare', 'UNLOCK', 'M19', 2, 'Artifact', '', null, true, 'Special', 2.0, false),
-    ('0ce4702d-f65b-413e-99da-112f632a0a63', 'd91ea728-2d69-42cb-bb5d-e2b058f0d7b1', 'Arcane Encyclopedia', 'Uncommon', 'UNLOCK', 'M19', 3, 'Artifact — Book', '', null, true, 'Special', 4.0, false),
-    ('62ff0730-6dd9-42d2-be0d-655d04adf229', '0b95c115-6745-4ce1-896b-9021e93c161e', 'Chaos Wand', 'Rare', 'UNLOCK', 'M19', 3, 'Artifact', '', null, true, 'Special', 2.0, false),
-    ('eb28b35c-28a5-4042-b21d-6d43658a16eb', '33c722cf-b4bf-431f-aefd-ee96241a7fbf', 'Crucible of Worlds', 'Mythic', 'UNIQUE', 'M19', 3, 'Artifact', '', null, false, 'Special', 0.1, false),
-    ('458ce930-c100-4ef5-b75a-a18051282f8c', '07ff619a-21ee-44b6-b666-ceab4a78096a', 'Desecrated Tomb', 'Rare', 'UNLOCK', 'M19', 3, 'Artifact', '', null, true, 'Special', 2.0, false),
-    ('ca600b3f-2c70-489b-b218-6e3245b90114', '9a440122-a015-4af2-b270-37f019884458', 'Diamond Mare', 'Uncommon', 'UNLOCK', 'M19', 2, 'Artifact Creature — Horse', '', null, true, 'Special', 4.0, false),
-    ('5b441fc8-bc89-47d4-8745-2525aeb6d98d', '8cf77dc4-763b-41b7-a5da-0ef2734f08e6', 'Dragon''s Hoard', 'Rare', 'UNLOCK', 'M19', 3, 'Artifact', '', null, true, 'Special', 2.0, false),
-    ('608f431b-a05c-4610-94f7-928d87b2c056', 'ab8301da-f9f7-4d90-afae-bd7e60834c22', 'Explosive Apparatus', 'Common', 'UNLIMITED', 'M19', 1, 'Artifact', '', null, true, 'Special', 5.0, false),
-    ('e148c1bf-84a2-48cd-882e-ad0fd74b8f0f', 'e6584e39-099c-437f-9239-fa718cac85af', 'Field Creeper', 'Common', 'UNLIMITED', 'M19', 2, 'Artifact Creature — Scarecrow', '', null, true, 'Special', 5.0, false),
-    ('26894980-8961-4479-85dd-5f01c899718b', 'df024c55-c008-48ec-a1a5-02ce336e3de6', 'Fountain of Renewal', 'Uncommon', 'UNLOCK', 'M19', 1, 'Artifact', '', null, true, 'Special', 4.0, false),
-    ('381e9f97-9655-4f41-9829-4ac26c2ed6ac', '893f319f-6e3d-4230-bb65-4f9179b18fad', 'Gargoyle Sentinel', 'Uncommon', 'UNLOCK', 'M19', 3, 'Artifact Creature — Gargoyle', '', null, true, 'Special', 4.0, false),
-    ('1d532b01-8bf7-4a27-a438-db03bcd00694', '0c0f7092-3fe6-4a6e-8b4e-803810b43e50', 'Gearsmith Guardian', 'Common', 'UNLIMITED', 'M19', 5, 'Artifact Creature — Construct', '', null, true, 'Special', 5.0, false),
-    ('ecf1f24f-d910-4ec6-95d2-0ecaf9f051aa', '487485a6-cf79-48c0-bea9-0ec6b3ee253c', 'Magistrate''s Scepter', 'Rare', 'UNLOCK', 'M19', 3, 'Artifact', '', null, true, 'Special', 2.0, false),
-    ('9dfba61f-9a6d-43e3-ad28-f74f737ef186', 'bd9e416a-89b3-4912-be9b-49fce6a93dc9', 'Manalith', 'Common', 'UNLIMITED', 'M19', 3, 'Artifact', '', null, true, 'Special', 5.0, false),
-    ('a2ca16ee-e415-4270-a453-47111d07a07f', '5d0e49fa-5dfb-48c2-af97-fdfb788d5f40', 'Marauder''s Axe', 'Common', 'UNLIMITED', 'M19', 2, 'Artifact — Equipment', '', null, true, 'Special', 5.0, false),
-    ('1bdb0b15-d651-4730-8be9-d0e01145311b', 'd9f11aa1-9219-42a8-85a9-a8f204160706', 'Meteor Golem', 'Uncommon', 'UNLOCK', 'M19', 7, 'Artifact Creature — Golem', '', null, true, 'Special', 4.0, false),
-    ('c2051fd0-99cf-4e11-a625-8294e6767e5b', '3212e47a-5492-4c50-9d4a-6ea562f1a6e1', 'Millstone', 'Uncommon', 'UNLOCK', 'M19', 2, 'Artifact', '', null, true, 'Special', 4.0, false),
-    ('1c3c7d24-7d5c-49de-b9f8-35c6d6c8c52a', '308d7868-49f9-47a3-a7b1-4b0332d610f1', 'Rogue''s Gloves', 'Uncommon', 'UNLOCK', 'M19', 2, 'Artifact — Equipment', '', null, true, 'Special', 4.0, false),
-    ('497d08a8-cffe-4164-a941-d8c8c85644c7', 'f1c4269a-1d99-4f3b-8107-a005df3468d5', 'Sigiled Sword of Valeron', 'Rare', 'UNLOCK', 'M19', 3, 'Artifact — Equipment', '', null, true, 'Special', 2.0, false),
-    ('bd2c1fb7-3c1d-49a9-b2c2-78ba2264df38', '974f788a-039f-4310-a2fe-16b14a1e2d35', 'Skyscanner', 'Common', 'UNLIMITED', 'M19', 3, 'Artifact Creature — Thopter', '', null, true, 'Special', 5.0, false),
-    ('ccf01421-856e-4cdd-8938-148928626f56', 'ca611c90-7753-43dd-af91-81694d004eeb', 'Suspicious Bookcase', 'Uncommon', 'UNLOCK', 'M19', 2, 'Artifact Creature — Wall', '', null, true, 'Special', 4.0, false),
-    ('1b06b670-7238-4732-85fd-ac6abebea57f', '921345ce-2eaf-4b95-b65d-1c27204665ed', 'Transmogrifying Wand', 'Rare', 'UNLOCK', 'M19', 3, 'Artifact', '', null, true, 'Special', 2.0, false),
-    ('db41b554-2bb1-4f11-be29-233d36cc955a', 'f155a05f-9f5e-4875-a407-103b85ce30ee', 'Cinder Barrens', 'Common', 'UNLIMITED', 'M19', 0, 'Land', '', null, true, 'Special', 5.0, false),
-    ('02f99756-d334-4dba-a375-ba3d91ecae62', '93695c16-c441-492d-af12-b57df9739846', 'Detection Tower', 'Rare', 'UNLOCK', 'M19', 0, 'Land', '', null, true, 'Special', 2.0, false),
-    ('b376c8c9-cd35-4c2b-8b5b-95ea9735b366', '941b0dd1-0df2-48ee-8829-615e9c3177a7', 'Forsaken Sanctuary', 'Common', 'UNLIMITED', 'M19', 0, 'Land', '', null, true, 'Special', 5.0, false),
-    ('6b28e1e1-0813-4e4a-a7a7-058b7787272c', 'ad6a2776-801f-4743-8268-6d654122171e', 'Foul Orchard', 'Common', 'UNLIMITED', 'M19', 0, 'Land', '', null, true, 'Special', 5.0, false),
-    ('b538a465-81c6-4282-9ac3-061167ac7dc3', 'c643365a-4255-4d23-adb9-0f8b456f0838', 'Highland Lake', 'Common', 'UNLIMITED', 'M19', 0, 'Land', '', null, true, 'Special', 5.0, false),
-    ('f47ee724-da0f-4eb1-b07b-b07e04e9f5b3', '2d9663be-c466-4191-85e2-a69ce0965432', 'Meandering River', 'Common', 'UNLIMITED', 'M19', 0, 'Land', '', null, true, 'Special', 5.0, false),
-    ('81766fd6-c7e0-4527-a63e-512d126c0421', 'c23e5b80-08d2-4e24-9908-fe2aa4f30f6f', 'Reliquary Tower', 'Uncommon', 'UNLOCK', 'M19', 0, 'Land', '', null, true, 'Special', 4.0, false),
-    ('b7657f02-d1dd-448e-bc0d-c6f25fbc35ea', '7eadffcb-1e15-44c1-b1db-78c71b8ec1ce', 'Rupture Spire', 'Uncommon', 'UNLOCK', 'M19', 0, 'Land', '', null, true, 'Special', 4.0, false),
-    ('bac2b853-f788-4b29-a76d-880da61ad91a', '90bccf66-58ec-445d-ac96-c6013054a1b4', 'Stone Quarry', 'Common', 'UNLIMITED', 'M19', 0, 'Land', '', null, true, 'Special', 5.0, false),
-    ('df8c56fa-fae6-48ba-813d-0d971b640896', 'f27d52e6-aab9-4f95-ae46-33d1173bf4fe', 'Submerged Boneyard', 'Common', 'UNLIMITED', 'M19', 0, 'Land', '', null, true, 'Special', 5.0, false),
-    ('07076412-18fe-4e15-bdb5-17111b4a66db', '00b34fab-5a80-4a4d-b6cf-72479197677a', 'Timber Gorge', 'Common', 'UNLIMITED', 'M19', 0, 'Land', '', null, true, 'Special', 5.0, false),
-    ('78b33867-5ccf-49a1-8e9b-9d2ddac78f17', 'a5478263-47c9-447f-9c7a-c77ce0752947', 'Tranquil Expanse', 'Common', 'UNLIMITED', 'M19', 0, 'Land', '', null, true, 'Special', 5.0, false),
-    ('303224d6-9769-4127-8e33-9129f337e2a8', 'e887fb3f-d4c9-4022-8f75-1de6ec94af96', 'Woodland Stream', 'Common', 'UNLIMITED', 'M19', 0, 'Land', '', null, true, 'Special', 5.0, false)
-) as v (id, oracle_id, forge_name, rarity, ownership_type, set_code, mana_value, types, colors, image_url, discoverable, spawn_region, weight, commander_eligible)
+    ('0503c55d-74bb-4165-9273-127c01bb2214', 'f8e1b38a-2a77-4cf1-8bef-31acb61ede10', 'Aegis of the Heavens', 'Uncommon', 'UNLOCK', 'M19', 2, 'Instant', 'W', null, true, 'Library', 4.0, false, false),
+    ('226f7c45-db9f-4d48-b575-4d2f1904c963', 'd2575513-72fa-49c7-be6b-9f6f85950f88', 'Aethershield Artificer', 'Uncommon', 'UNLOCK', 'M19', 4, 'Creature — Dwarf Artificer', 'W', null, true, 'Library', 4.0, false, false),
+    ('4c565076-5db2-47ea-8ee0-4a4fd7bb353d', 'b25bea73-7444-4ee2-8022-611461506117', 'Ajani, Adversary of Tyrants', 'Mythic', 'UNIQUE', 'M19', 4, 'Legendary Planeswalker — Ajani', 'W', null, false, 'Library', 0.1, false, false),
+    ('1aebbb57-31b3-4289-815e-4f529e29f3ea', '17c4807c-158e-4a86-90f1-d8fb2ebe892a', 'Ajani''s Last Stand', 'Rare', 'UNLOCK', 'M19', 4, 'Enchantment', 'W', null, true, 'Library', 2.0, false, false),
+    ('2f717e04-c078-4696-9ed6-e973033d7be0', '95e94dea-5ac0-4d6f-adec-ca147aee861f', 'Ajani''s Pridemate', 'Uncommon', 'UNLOCK', 'M19', 2, 'Creature — Cat Soldier', 'W', null, true, 'Library', 4.0, false, false),
+    ('c9045fcb-b633-4c35-8058-6234311551ae', '4a782bf9-4051-4613-8852-33b0d85a0edd', 'Ajani''s Welcome', 'Uncommon', 'UNLOCK', 'M19', 1, 'Enchantment', 'W', null, true, 'Library', 4.0, false, false),
+    ('f4bae0e4-1143-4dc4-afb1-e6b4201ff101', 'f63ea0e5-7769-4a22-bbb3-658281141d8c', 'Angel of the Dawn', 'Common', 'UNLIMITED', 'M19', 5, 'Creature — Angel', 'W', null, true, 'Library', 5.0, false, true),
+    ('62d2e929-7ae3-4560-9cfa-53b89c8a6016', 'd89bbfe7-e7ef-4f1c-a6b5-6d8ef4079daa', 'Cavalry Drillmaster', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Human Knight', 'W', null, true, 'Library', 5.0, false, true),
+    ('5be8eed7-c033-42cc-bd21-4512db7af66c', 'aff34f28-f707-4458-8af3-1bd5b13a6b10', 'Cleansing Nova', 'Rare', 'UNLOCK', 'M19', 5, 'Sorcery', 'W', null, true, 'Library', 2.0, false, false),
+    ('c2f461b1-c801-4f0c-8fd7-fe68b6078ac6', 'ebd33f4c-2cc8-46e3-b367-ce5b37c2719b', 'Daybreak Chaplain', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Human Cleric', 'W', null, true, 'Library', 5.0, false, true),
+    ('7e1e0f13-35a6-4a5e-8666-47bc5c275be7', '6a077a9b-d725-4b14-957f-1586db2adf59', 'Dwarven Priest', 'Common', 'UNLIMITED', 'M19', 4, 'Creature — Dwarf Cleric', 'W', null, true, 'Library', 5.0, false, true),
+    ('e388c433-3a37-45f6-825a-d13d2223b6f7', 'b500c460-2814-47a4-b307-17ca519f3565', 'Gallant Cavalry', 'Common', 'UNLIMITED', 'M19', 4, 'Creature — Human Knight', 'W', null, true, 'Library', 5.0, false, true),
+    ('452591ca-7273-4e47-820b-3ff89697a036', 'cb97da84-1d13-4795-b68a-2bf111a50067', 'Herald of Faith', 'Uncommon', 'UNLOCK', 'M19', 5, 'Creature — Angel', 'W', null, true, 'Library', 4.0, false, false),
+    ('197743cd-249c-42ba-ac8d-027c088f8418', '207c7f93-3abf-44c5-ace6-3f86359c9745', 'Hieromancer''s Cage', 'Uncommon', 'UNLOCK', 'M19', 4, 'Enchantment', 'W', null, true, 'Library', 4.0, false, false),
+    ('812cf63f-aa3d-405b-92e1-7ffa31352481', 'd465a3d6-5830-456c-8e7a-908b464db846', 'Inspired Charge', 'Common', 'UNLIMITED', 'M19', 4, 'Instant', 'W', null, true, 'Library', 5.0, false, true),
+    ('7c1d36b5-37fb-4e52-ad85-c3a09a990ea0', '87bd0fdb-c5b9-46ea-9858-1a870960351f', 'Invoke the Divine', 'Common', 'UNLIMITED', 'M19', 3, 'Instant', 'W', null, true, 'Library', 5.0, false, true),
+    ('3d9ce5eb-eaeb-4c93-8d31-4aeb8fcc4cce', 'f42d4556-5be2-4861-9f88-1b630b43eff2', 'Isolate', 'Rare', 'UNLOCK', 'M19', 1, 'Instant', 'W', null, true, 'Library', 2.0, false, false),
+    ('213b4584-420a-48c2-9709-7b07458e914b', '524d81fb-33f5-4e77-ae41-477b91e67be4', 'Knight of the Tusk', 'Common', 'UNLIMITED', 'M19', 6, 'Creature — Human Knight', 'W', null, true, 'Library', 5.0, false, true),
+    ('734ff6ac-000d-4fc6-b97b-07b9b21f745c', '63604320-68de-415e-b1f9-dd0f85c5d8a3', 'Knight''s Pledge', 'Common', 'UNLIMITED', 'M19', 2, 'Enchantment — Aura', 'W', null, true, 'Library', 5.0, false, true),
+    ('366ab022-967d-48ff-a1f9-4bd642dba1ae', '9ba6cec6-97bf-4a83-9ffa-77e187d0945b', 'Knightly Valor', 'Uncommon', 'UNLOCK', 'M19', 5, 'Enchantment — Aura', 'W', null, true, 'Library', 4.0, false, false),
+    ('2ffcbcda-2ba3-45e7-80c0-85ea3b7eea0c', 'a8a8407c-d0e3-4311-82ed-1ab1f75159d9', 'Lena, Selfless Champion', 'Rare', 'UNLOCK', 'M19', 6, 'Legendary Creature — Human Knight', 'W', null, true, 'Library', 2.0, true, false),
+    ('724738ad-6a9b-4ef6-b637-558645cd8151', 'de1e1352-adb2-4ac1-bb2a-ee654d5c727d', 'Leonin Vanguard', 'Uncommon', 'UNLOCK', 'M19', 1, 'Creature — Cat Soldier', 'W', null, true, 'Library', 4.0, false, false),
+    ('b31b2e5e-6572-462a-9fa0-1b2e660099e3', '8b1351e6-165e-4ca3-96d5-4774b3176362', 'Leonin Warleader', 'Rare', 'UNLOCK', 'M19', 4, 'Creature — Cat Soldier', 'W', null, true, 'Library', 2.0, false, false),
+    ('928d4250-c379-4134-a263-7811c80a8760', '57f0f55d-4cf9-4a35-96dd-05c24c2a9a4f', 'Loxodon Line Breaker', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Elephant Soldier', 'W', null, true, 'Library', 5.0, false, true),
+    ('9db10390-725e-40f5-885b-a433e7b46f52', '2c006a63-0550-4a87-a5fe-f4247857271c', 'Luminous Bonds', 'Common', 'UNLIMITED', 'M19', 3, 'Enchantment — Aura', 'W', null, true, 'Library', 5.0, false, true),
+    ('4a0857fa-f2cc-4c01-9fe5-8f74d08d1b29', '531f78d5-5004-4b02-99c7-b390cb342fd9', 'Make a Stand', 'Uncommon', 'UNLOCK', 'M19', 3, 'Instant', 'W', null, true, 'Library', 4.0, false, false),
+    ('5e18bd43-6cee-40a3-88f5-c775fb705172', 'b9f4f96b-6e54-4fe6-8df7-623e0fc72409', 'Mentor of the Meek', 'Rare', 'UNLOCK', 'M19', 3, 'Creature — Human Soldier', 'W', null, true, 'Library', 2.0, false, false),
+    ('dc45dcdd-ed92-43f6-b6d2-670b3252ed27', '593caa15-e1d1-477f-bbb4-124d7a7b81f3', 'Mighty Leap', 'Common', 'UNLIMITED', 'M19', 2, 'Instant', 'W', null, true, 'Library', 5.0, false, true),
+    ('43c5bf25-937c-4e17-9ed4-b4c4579fa9dc', 'edb6ae9e-a41c-4d82-97bf-4be00e98364c', 'Militia Bugler', 'Uncommon', 'UNLOCK', 'M19', 3, 'Creature — Human Soldier', 'W', null, true, 'Library', 4.0, false, false),
+    ('00101358-0e89-4bd1-b1f2-e889645b616e', '916d2a0d-1c3e-4102-958d-524b6b4df509', 'Novice Knight', 'Uncommon', 'UNLOCK', 'M19', 1, 'Creature — Human Knight', 'W', null, true, 'Library', 4.0, false, false),
+    ('0ea1dfb4-1983-41f7-956c-f2a1d1489b54', '014d00fc-434a-4b06-84b2-afd930677d61', 'Oreskos Swiftclaw', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Cat Warrior', 'W', null, true, 'Library', 5.0, false, true),
+    ('0c04eafe-8be0-416e-a5b9-486a3b3b5984', '24db5905-d513-42c6-9e9d-114ac5cbd21d', 'Pegasus Courser', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Pegasus', 'W', null, true, 'Library', 5.0, false, true),
+    ('9620716d-9be8-4ebd-80d2-679373f4f897', 'c40bc9f6-2b72-4ae1-b912-50075af59628', 'Remorseful Cleric', 'Rare', 'UNLOCK', 'M19', 2, 'Creature — Spirit Cleric', 'W', null, true, 'Library', 2.0, false, false),
+    ('586854d1-edfd-4c66-873d-df459324dbfd', '2ac93092-1a57-4cf7-8f03-1dca86d5c476', 'Resplendent Angel', 'Mythic', 'UNIQUE', 'M19', 3, 'Creature — Angel', 'W', null, false, 'Library', 0.1, false, false),
+    ('dfbdd90c-1ae3-45e5-b1e5-5b8615a1511f', 'b1385b03-cb4b-4812-857f-7421f1df39af', 'Revitalize', 'Common', 'UNLIMITED', 'M19', 2, 'Instant', 'W', null, true, 'Library', 5.0, false, true),
+    ('c6691e62-8887-41e8-8e74-76ee2353d45e', '438ee544-78a2-4e32-9343-70838b60ac16', 'Rustwing Falcon', 'Common', 'UNLIMITED', 'M19', 1, 'Creature — Bird', 'W', null, true, 'Library', 5.0, false, true),
+    ('d21e0516-4430-4292-850b-f5c524d7f8f8', 'e07b6988-9ee7-4f20-8aa5-7dfa87ff507b', 'Shield Mare', 'Uncommon', 'UNLOCK', 'M19', 3, 'Creature — Horse', 'W', null, true, 'Library', 4.0, false, false),
+    ('c57417c7-867b-4b64-bfe3-1744dfe9b44d', 'a375b739-6a6c-4e07-9b1c-a304f84ea2cc', 'Star-Crowned Stag', 'Common', 'UNLIMITED', 'M19', 4, 'Creature — Elk', 'W', null, true, 'Library', 5.0, false, true),
+    ('3644df41-b690-4581-ac7d-c85cec75411f', '437661f7-a32f-45c9-a006-05a1e38ee8d9', 'Suncleanser', 'Rare', 'UNLOCK', 'M19', 2, 'Creature — Human Cleric', 'W', null, true, 'Library', 2.0, false, false),
+    ('66fbde22-d98d-4f12-b4d8-1bad2a9878b2', 'c60b8edd-aa3f-48ea-b202-d10599f91d9d', 'Take Vengeance', 'Common', 'UNLIMITED', 'M19', 2, 'Sorcery', 'W', null, true, 'Library', 5.0, false, true),
+    ('8320e35b-15b9-4f98-b9b8-9c951696408b', '12c7289f-da53-403a-a607-227f43c7e171', 'Trusty Packbeast', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Beast', 'W', null, true, 'Library', 5.0, false, true),
+    ('6ad750bc-850b-483b-8910-eb6562f925bc', 'b5c03abf-4297-4402-9107-539e92d41f2f', 'Valiant Knight', 'Rare', 'UNLOCK', 'M19', 4, 'Creature — Human Knight', 'W', null, true, 'Library', 2.0, false, false),
+    ('5d6178ed-6353-4733-81e1-7b3dc592c3bd', '0a90d1fb-7a76-4b62-b001-4a539a8e5df1', 'Aether Tunnel', 'Uncommon', 'UNLOCK', 'M19', 2, 'Enchantment — Aura', 'U', null, true, 'Building B', 4.0, false, false),
+    ('a07b1d89-1e6a-4e95-be89-1f03182fc470', 'a97da5a9-17fc-4367-81e1-17ff81601a63', 'Anticipate', 'Common', 'UNLIMITED', 'M19', 2, 'Instant', 'U', null, true, 'Building B', 5.0, false, true),
+    ('1b12dfc1-81f2-44b2-baa2-73cc21363978', 'ad5f9a18-89a5-4bcb-9cd7-5399ffd252d3', 'Aven Wind Mage', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Bird Wizard', 'U', null, true, 'Building B', 5.0, false, true),
+    ('e6966738-b4fc-4854-81b0-09de305854f2', 'ad11ff81-acaa-4529-ba15-718dadbea259', 'Aviation Pioneer', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Human Artificer', 'U', null, true, 'Building B', 5.0, false, true),
+    ('4579e7fc-650d-41ba-8ed7-3bd6453a3ce3', '31be5bf4-9950-456c-8365-74b48e132ef5', 'Bone to Ash', 'Uncommon', 'UNLOCK', 'M19', 4, 'Instant', 'U', null, true, 'Building B', 4.0, false, false),
+    ('9cff3fae-e072-4068-a1de-27de3d89c532', '7d00fb28-ea6c-49a9-b4af-ffb38860a9a7', 'Cancel', 'Common', 'UNLIMITED', 'M19', 3, 'Instant', 'U', null, true, 'Building B', 5.0, false, true),
+    ('1081df25-1137-4c4d-909b-40e78723652c', 'a620a765-97ba-4687-acfd-4dec7da75d9f', 'Departed Deckhand', 'Uncommon', 'UNLOCK', 'M19', 2, 'Creature — Spirit Pirate', 'U', null, true, 'Building B', 4.0, false, false),
+    ('2ff7c89c-41dc-4ac3-bbce-38ab86f435ea', '9d8fe3f8-5027-4f9e-999e-e277caa96478', 'Disperse', 'Common', 'UNLIMITED', 'M19', 2, 'Instant', 'U', null, true, 'Building B', 5.0, false, true),
+    ('cb3b35b8-f321-46d8-a441-6b9a6efa9021', '273b339c-964b-4a18-8eb5-ceb8abcdfd9e', 'Divination', 'Common', 'UNLIMITED', 'M19', 3, 'Sorcery', 'U', null, true, 'Building B', 5.0, false, true),
+    ('27d38bba-6eb9-4dd8-81aa-722def89b163', 'a34c3012-f787-4998-93c7-89c4decaa1ba', 'Djinn of Wishes', 'Rare', 'UNLOCK', 'M19', 5, 'Creature — Djinn', 'U', null, true, 'Building B', 2.0, false, false),
+    ('cb38f190-30f0-49ca-99c3-d3cdf21075e8', '48a8fce6-b493-4b1d-8ac8-2a4f4b4781b5', 'Dwindle', 'Common', 'UNLIMITED', 'M19', 3, 'Enchantment — Aura', 'U', null, true, 'Building B', 5.0, false, true),
+    ('975f61eb-a121-4f43-93a4-c6f20c6aee84', '46665089-aa3d-44c3-964d-6638dfbb5782', 'Essence Scatter', 'Common', 'UNLIMITED', 'M19', 2, 'Instant', 'U', null, true, 'Building B', 5.0, false, true),
+    ('ccad82f5-5c5c-42ad-b66e-942f0d9631ca', 'fd28fe55-36cd-4242-8dd4-edb58fbb9895', 'Exclusion Mage', 'Uncommon', 'UNLOCK', 'M19', 3, 'Creature — Human Wizard', 'U', null, true, 'Building B', 4.0, false, false),
+    ('e0aa62c0-d24b-4bce-9f2b-d42402b0830c', '6dc534e8-e22b-4e3c-aa30-c6e4c84f698c', 'Frilled Sea Serpent', 'Common', 'UNLIMITED', 'M19', 6, 'Creature — Serpent', 'U', null, true, 'Building B', 5.0, false, true),
+    ('77d9e666-d9c9-4ccd-89a5-83de79677fa6', '589d6b67-17ad-4ca7-9b0c-1b919bf03a27', 'Gearsmith Prodigy', 'Common', 'UNLIMITED', 'M19', 1, 'Creature — Human Artificer', 'U', null, true, 'Building B', 5.0, false, true),
+    ('347760a1-03f5-4cc9-87ad-e08986b1ea21', '8d813b72-8ead-4a61-88ff-e93c8d843196', 'Ghostform', 'Common', 'UNLIMITED', 'M19', 2, 'Sorcery', 'U', null, true, 'Building B', 5.0, false, true),
+    ('7e925a7a-da5b-4d5d-b5ff-37645ac217f9', '29933a32-3738-4ec5-aa6d-ce3684e2e5a3', 'Horizon Scholar', 'Uncommon', 'UNLOCK', 'M19', 6, 'Creature — Sphinx', 'U', null, true, 'Building B', 4.0, false, false),
+    ('eff03d37-d90a-4dcc-bacd-64fd71301354', '2518a4f2-607f-41bb-9389-2009138d6b09', 'Metamorphic Alteration', 'Rare', 'UNLOCK', 'M19', 2, 'Enchantment — Aura', 'U', null, true, 'Building B', 2.0, false, false),
+    ('5b3ffc69-f21b-410e-8993-8c1b4669fc19', '7275fb8c-571a-4c4c-889a-829419332e51', 'Mirror Image', 'Uncommon', 'UNLOCK', 'M19', 3, 'Creature — Shapeshifter', 'U', null, true, 'Building B', 4.0, false, false),
+    ('a35c1bd0-3d1a-4e46-b74d-11db6867e0d7', '808d5a67-8c38-42f5-9413-8771d8b4ae38', 'Mistcaller', 'Rare', 'UNLOCK', 'M19', 1, 'Creature — Merfolk Wizard', 'U', null, true, 'Building B', 2.0, false, false),
+    ('1b19cad0-5754-4625-8303-c8310bc7cbd5', 'b77dfe2a-ebc9-46b0-9134-2ecb2abdd8be', 'Mystic Archaeologist', 'Rare', 'UNLOCK', 'M19', 2, 'Creature — Human Wizard', 'U', null, true, 'Building B', 2.0, false, false),
+    ('949589c4-97bc-46b4-bc6c-4b2709fd5e3a', '43d7fcf3-acc2-4e9b-a466-c73b1b6c58af', 'Omenspeaker', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Human Wizard', 'U', null, true, 'Building B', 5.0, false, true),
+    ('db534b4e-8bff-4924-baea-9988d195fb25', '730e39e6-c61d-48b5-8827-bfd952bf1be7', 'Omniscience', 'Mythic', 'UNIQUE', 'M19', 10, 'Enchantment', 'U', null, false, 'Building B', 0.1, false, false),
+    ('17f2aaf5-6c1f-4663-865f-6cdd5640485a', '757eadac-dd29-4a7f-8683-5bc823168326', 'One with the Machine', 'Rare', 'UNLOCK', 'M19', 4, 'Sorcery', 'U', null, true, 'Building B', 2.0, false, false),
+    ('2256e07f-a35a-4393-9744-045564d5770b', 'df9fe645-6f7b-44a0-ab69-b68cb7e525cd', 'Patient Rebuilding', 'Rare', 'UNLOCK', 'M19', 5, 'Enchantment', 'U', null, true, 'Building B', 2.0, false, false),
+    ('285d22fa-1623-463a-83c0-a9aa7c969ce2', '328b42f1-d679-4f9c-80e3-38fe3b965d10', 'Psychic Corrosion', 'Uncommon', 'UNLOCK', 'M19', 3, 'Enchantment', 'U', null, true, 'Building B', 4.0, false, false),
+    ('19316cbb-d1af-4ab7-b588-78637503e986', '52241b9c-7a69-4176-9234-8bdab09d8e64', 'Sai, Master Thopterist', 'Rare', 'UNLOCK', 'M19', 3, 'Legendary Creature — Human Artificer', 'U', null, true, 'Building B', 2.0, true, false),
+    ('3a55f484-5734-469c-8d41-95ce44473ec1', '3e400e13-6cae-45e6-b5cc-5b5f9d74dec5', 'Salvager of Secrets', 'Common', 'UNLIMITED', 'M19', 5, 'Creature — Merfolk Wizard', 'U', null, true, 'Building B', 5.0, false, true),
+    ('cb4664d4-fb00-4572-a60d-00336117b8a5', '0753aee4-33db-48c5-9854-16a9d91535b2', 'Scholar of Stars', 'Common', 'UNLIMITED', 'M19', 4, 'Creature — Human Artificer', 'U', null, true, 'Building B', 5.0, false, true),
+    ('46588683-74c7-4041-a43b-95d51ba51a94', '6e060984-2015-4dc4-b53d-ab6bf2abdacc', 'Sift', 'Uncommon', 'UNLOCK', 'M19', 4, 'Sorcery', 'U', null, true, 'Building B', 4.0, false, false),
+    ('586d5000-1fdb-4bfe-aa34-63b25ee94bb9', '6e51a0b2-e07f-4c9d-b055-dd1dcd2e29d4', 'Skilled Animator', 'Uncommon', 'UNLOCK', 'M19', 3, 'Creature — Human Artificer', 'U', null, true, 'Building B', 4.0, false, false),
+    ('e0c53e64-69cf-4296-8a1e-f8817f25c0b4', '9b93ff69-f195-4d72-8e1d-574c3e53bca8', 'Sleep', 'Uncommon', 'UNLOCK', 'M19', 4, 'Sorcery', 'U', null, true, 'Building B', 4.0, false, false),
+    ('2f6b6cbc-b25c-4221-ae65-a29fcf504f2f', 'e15060c3-3773-4548-8747-ff59dcf2b519', 'Snapping Drake', 'Common', 'UNLIMITED', 'M19', 4, 'Creature — Drake', 'U', null, true, 'Building B', 5.0, false, true),
+    ('5d65c22b-7640-4433-930b-4bc381ac7361', '9c5f4d02-eedb-4c6c-9f13-1b7a45382483', 'Supreme Phantom', 'Rare', 'UNLOCK', 'M19', 2, 'Creature — Spirit', 'U', null, true, 'Building B', 2.0, false, false),
+    ('9002d0f1-ff2c-4d1c-a7db-3252ef6bebbd', '8342de86-5b11-486d-8012-f0f9d2ded8c4', 'Surge Mare', 'Uncommon', 'UNLOCK', 'M19', 2, 'Creature — Horse Fish', 'U', null, true, 'Building B', 4.0, false, false),
+    ('9d3d062c-5853-44f9-b951-a264e9e0d72d', '68227969-39cf-42cf-b3b8-cf8a04647d7e', 'Switcheroo', 'Uncommon', 'UNLOCK', 'M19', 5, 'Sorcery', 'U', null, true, 'Building B', 4.0, false, false),
+    ('e5e12371-f05c-41cf-92ca-7cb17c2f7f1a', 'e22824cf-07a1-4c83-b6c4-9d8fcff3892f', 'Tezzeret, Artifice Master', 'Mythic', 'UNIQUE', 'M19', 5, 'Legendary Planeswalker — Tezzeret', 'U', null, false, 'Building B', 0.1, false, false),
+    ('2eda67da-02b5-4ecb-9038-10e026d454ec', '8a268636-75d5-4631-8272-8b001f569db5', 'Tolarian Scholar', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Human Wizard', 'U', null, true, 'Building B', 5.0, false, true),
+    ('05f0b6ce-eb70-4f42-9360-c7d09f48a5c5', 'e0462a2c-fb88-495f-813b-6476ee3e62bb', 'Totally Lost', 'Common', 'UNLIMITED', 'M19', 5, 'Instant', 'U', null, true, 'Building B', 5.0, false, true),
+    ('8f12d70b-fff7-4d0c-982e-2fea70018a78', 'd6596336-8177-4475-95b9-a21858563276', 'Uncomfortable Chill', 'Common', 'UNLIMITED', 'M19', 3, 'Instant', 'U', null, true, 'Building B', 5.0, false, true),
+    ('4fb995c8-1bc2-4ff4-b8e9-f9b6bc0de0fe', 'b2ca8824-6bd8-4aa3-b156-618118eb98a4', 'Wall of Mist', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Wall', 'U', null, true, 'Building B', 5.0, false, true),
+    ('a5964daa-2f9e-4a4b-a091-91e7adc3e9c3', '5e038a3a-fbab-46c2-8773-1327d953da16', 'Windreader Sphinx', 'Rare', 'UNLOCK', 'M19', 7, 'Creature — Sphinx', 'U', null, true, 'Building B', 2.0, false, false),
+    ('de2de2bd-9ba7-4b6f-94c2-dafb2011a48e', 'edbf1b87-2d1e-47e6-a04e-a2b1646af7d9', 'Abnormal Endurance', 'Common', 'UNLIMITED', 'M19', 2, 'Instant', 'B', null, true, 'Library', 5.0, false, true),
+    ('6fe72bd9-825e-4451-9314-826882f75c85', 'c1cf9d74-e700-456a-9e5a-1c4df22db268', 'Blood Divination', 'Uncommon', 'UNLOCK', 'M19', 4, 'Sorcery', 'B', null, true, 'Library', 4.0, false, false),
+    ('05145a8d-0bfb-4f07-87cf-65875310bdb4', '7c2f1915-8d91-47c6-bab4-be325348673a', 'Bogstomper', 'Common', 'UNLIMITED', 'M19', 6, 'Creature — Beast', 'B', null, true, 'Library', 5.0, false, true),
+    ('08a0de62-6e9f-4ee9-9d8d-ee6f6a115307', '51926430-b98a-424d-9347-c36938132825', 'Bone Dragon', 'Mythic', 'UNIQUE', 'M19', 5, 'Creature — Dragon Skeleton', 'B', null, false, 'Library', 0.1, false, false),
+    ('3867704d-d2ef-4185-b53d-84eba6a6776f', 'c650a7bc-e350-44a0-a698-d4a233d66156', 'Child of Night', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Vampire', 'B', null, true, 'Library', 5.0, false, true),
+    ('c9699446-b6f5-4e6a-a263-059cbf6e4b7e', '99024aa8-5687-4d38-8a4b-feef42d6c1ff', 'Death Baron', 'Rare', 'UNLOCK', 'M19', 3, 'Creature — Zombie Wizard', 'B', null, true, 'Library', 2.0, false, false),
+    ('d50f9563-7bf8-4c3c-ac82-327221e56551', '2e0b838d-c858-4aa5-999e-c4ef9d29571b', 'Demon of Catastrophes', 'Rare', 'UNLOCK', 'M19', 4, 'Creature — Demon', 'B', null, true, 'Library', 2.0, false, false),
+    ('5cf2d355-404e-4c21-9bc2-973d09a845a5', '6048fc70-0dcc-4b54-977d-16e240225f82', 'Diregraf Ghoul', 'Uncommon', 'UNLOCK', 'M19', 1, 'Creature — Zombie', 'B', null, true, 'Library', 4.0, false, false),
+    ('a1f70ee8-7e59-43d6-a7b2-29cb5cd1d8b3', '11cb509d-21af-48f1-b355-135ebd3e4bd1', 'Doomed Dissenter', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Human', 'B', null, true, 'Library', 5.0, false, true),
+    ('b433b9fc-69fc-4a57-a16b-f1afd3033b56', '33d405ea-7a9a-4970-b70f-9c05d90dd6f0', 'Duress', 'Common', 'UNLIMITED', 'M19', 1, 'Sorcery', 'B', null, true, 'Library', 5.0, false, true),
+    ('40b03528-f4ec-4825-ba4c-c485cb4eab3a', 'bdb319a6-a1cd-44f5-999d-af1bb55b2fc4', 'Epicure of Blood', 'Common', 'UNLIMITED', 'M19', 5, 'Creature — Vampire', 'B', null, true, 'Library', 5.0, false, true),
+    ('e8cb52a4-5fec-41a0-8030-503a61e3d33e', 'd655a1c9-b84d-4069-a2ca-3aa0dacab3e1', 'Fell Specter', 'Uncommon', 'UNLOCK', 'M19', 4, 'Creature — Specter', 'B', null, true, 'Library', 4.0, false, false),
+    ('f0fa0ad8-854a-4b4e-9f87-e1dfaa11253c', '3b00068d-ad07-417c-bbb3-5f980615fb06', 'Fraying Omnipotence', 'Rare', 'UNLOCK', 'M19', 5, 'Sorcery', 'B', null, true, 'Library', 2.0, false, false),
+    ('3c6d2a84-5e47-4f7a-83f7-ee4e670980c7', '1a2030cc-d7ee-4059-b2d7-fb95ea8e267b', 'Gravedigger', 'Uncommon', 'UNLOCK', 'M19', 4, 'Creature — Zombie', 'B', null, true, 'Library', 4.0, false, false),
+    ('4dc5f62c-2d29-4a94-8501-13dc6a93c5a1', '216c5a72-ef87-4ada-bf52-437e50874be5', 'Graveyard Marshal', 'Rare', 'UNLOCK', 'M19', 2, 'Creature — Zombie Soldier', 'B', null, true, 'Library', 2.0, false, false),
+    ('7624c9aa-2f47-4fcc-a9fe-cc843e8de053', 'fed32c9c-7458-4143-b0b2-45ca23ba25ee', 'Hired Blade', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Human Assassin', 'B', null, true, 'Library', 5.0, false, true),
+    ('d17aaa92-10ca-4f70-b45e-5a51e9192efb', '0931206b-eed2-40d0-9496-5ecefc7f8f90', 'Infectious Horror', 'Common', 'UNLIMITED', 'M19', 4, 'Creature — Zombie Horror', 'B', null, true, 'Library', 5.0, false, true),
+    ('4e291f27-d74f-48e7-bcb4-ddcc558c2211', '32aa920c-0d91-4bc9-803c-d13857688d10', 'Infernal Reckoning', 'Rare', 'UNLOCK', 'M19', 1, 'Instant', 'B', null, true, 'Library', 2.0, false, false),
+    ('9cf7ff14-0de8-4ef9-8425-df15629adc4b', '3fc640dd-6292-4d36-82fb-bd366bc00bd3', 'Infernal Scarring', 'Common', 'UNLIMITED', 'M19', 2, 'Enchantment — Aura', 'B', null, true, 'Library', 5.0, false, true),
+    ('74e49567-8ad6-4ce9-a55d-4db5e0fd9532', '7af0e2da-9163-42d9-bf69-439cc61cd28d', 'Isareth the Awakener', 'Rare', 'UNLOCK', 'M19', 3, 'Legendary Creature — Human Wizard', 'B', null, true, 'Library', 2.0, true, false),
+    ('32bd3acd-aa62-4708-9336-e3430fd0e541', '01b3af6d-ab7d-4137-a94a-1cf2cbfd9d44', 'Lich''s Caress', 'Common', 'UNLIMITED', 'M19', 5, 'Sorcery', 'B', null, true, 'Library', 5.0, false, true),
+    ('a7939170-f84e-44c6-b8bc-a180cf7f85d9', '4f66489c-5a19-40ad-9126-461fa8231f1b', 'Liliana, Untouched by Death', 'Mythic', 'UNIQUE', 'M19', 4, 'Legendary Planeswalker — Liliana', 'B', null, false, 'Library', 0.1, false, false),
+    ('750e6246-c28d-46ed-9966-26706f6d3172', '6858702a-e563-4dcb-a50d-65406cea7c86', 'Liliana''s Contract', 'Rare', 'UNLOCK', 'M19', 5, 'Enchantment', 'B', null, true, 'Library', 2.0, false, false),
+    ('f49d5f95-c8a8-4d65-9546-26c2113db817', 'cf75dbd8-b65a-48d9-b96b-4afb43f336d1', 'Macabre Waltz', 'Common', 'UNLIMITED', 'M19', 2, 'Sorcery', 'B', null, true, 'Library', 5.0, false, true),
+    ('8423f50f-add7-4502-9ac0-8de1ccb2603d', 'ad44cf74-b717-48fb-9fa2-77512024d76a', 'Mind Rot', 'Common', 'UNLIMITED', 'M19', 3, 'Sorcery', 'B', null, true, 'Library', 5.0, false, true),
+    ('45368bf3-d5e9-43e6-a67d-93c2e93acc72', '938b4e2c-88d9-4637-bc00-e228920c9a78', 'Murder', 'Uncommon', 'UNLOCK', 'M19', 3, 'Instant', 'B', null, true, 'Library', 4.0, false, false),
+    ('f12efbc0-ce88-4622-ad07-2808e651ac5a', '9ecf56b9-1f36-4030-8333-1675ccc663d9', 'Nightmare''s Thirst', 'Uncommon', 'UNLOCK', 'M19', 1, 'Instant', 'B', null, true, 'Library', 4.0, false, false),
+    ('9ced1022-abd9-4e22-a4f2-fef738295224', '28778958-a1f9-4fea-b551-c193d1257f18', 'Open the Graves', 'Rare', 'UNLOCK', 'M19', 5, 'Enchantment', 'B', null, true, 'Library', 2.0, false, false),
+    ('a6e359c3-2a18-4240-b38a-216372161cd8', '520c4d88-34b6-4a26-81ca-65eb8b10461c', 'Phylactery Lich', 'Rare', 'UNLOCK', 'M19', 3, 'Creature — Zombie', 'B', null, true, 'Library', 2.0, false, false),
+    ('995596a3-343d-4272-86bf-d76fd32ab78e', '4cd096ac-dd67-4208-a3ad-8e6061b442c6', 'Plague Mare', 'Uncommon', 'UNLOCK', 'M19', 3, 'Creature — Nightmare Horse', 'B', null, true, 'Library', 4.0, false, false),
+    ('676ec702-75c4-4733-b500-eb15406778bb', 'e9ccec56-ec2b-4ab8-b929-6e4795711db9', 'Ravenous Harpy', 'Uncommon', 'UNLOCK', 'M19', 3, 'Creature — Harpy', 'B', null, true, 'Library', 4.0, false, false),
+    ('a3d4ac21-2203-45f4-b5f2-dc186ccdbe69', '9dbc3530-b278-4c8d-b2cc-a09dfac9d5e5', 'Reassembling Skeleton', 'Uncommon', 'UNLOCK', 'M19', 2, 'Creature — Skeleton Warrior', 'B', null, true, 'Library', 4.0, false, false),
+    ('bc73644e-884c-47cd-aeec-ab80360dd5ae', '4e769107-0f32-4181-9e57-ffebc2228d3a', 'Rise from the Grave', 'Uncommon', 'UNLOCK', 'M19', 5, 'Sorcery', 'B', null, true, 'Library', 4.0, false, false),
+    ('8fee5cc4-a686-4ce6-aa6b-1b8a88e6dea3', '3792763c-7aa0-4055-b8a1-3257e0443ef1', 'Skeleton Archer', 'Common', 'UNLIMITED', 'M19', 4, 'Creature — Skeleton Archer', 'B', null, true, 'Library', 5.0, false, true),
+    ('2c7f2740-a193-4b4c-af00-2dd22d74a4ba', '41684707-5118-45cf-892d-46b66045d026', 'Skymarch Bloodletter', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Vampire Soldier', 'B', null, true, 'Library', 5.0, false, true),
+    ('5326d251-bb91-4653-b1fa-44f14c4e0b88', '13718d93-fe46-4a18-a511-88649ef1c9de', 'Sovereign''s Bite', 'Common', 'UNLIMITED', 'M19', 2, 'Sorcery', 'B', null, true, 'Library', 5.0, false, true),
+    ('2b737126-50b5-4678-91bf-197b64086fe4', '7fd61a18-6e4f-40c5-aa00-3d101ec1ec82', 'Stitcher''s Supplier', 'Uncommon', 'UNLOCK', 'M19', 1, 'Creature — Zombie', 'B', null, true, 'Library', 4.0, false, false),
+    ('300468ab-fbae-42ae-97bc-b08f795efa5c', '444493a6-0f90-4847-9619-4ea8fbf7cf6f', 'Strangling Spores', 'Common', 'UNLIMITED', 'M19', 4, 'Instant', 'B', null, true, 'Library', 5.0, false, true),
+    ('2cc5760e-8b27-4d37-9772-c9eda90b1d95', '7e280770-9a8f-4445-84d2-3b9cac659136', 'Two-Headed Zombie', 'Common', 'UNLIMITED', 'M19', 4, 'Creature — Zombie', 'B', null, true, 'Library', 5.0, false, true),
+    ('167822a5-2ab5-42f5-afa4-562fe2d7501b', 'c0045925-25bf-403c-b721-5f05ba30985b', 'Vampire Neonate', 'Common', 'UNLIMITED', 'M19', 1, 'Creature — Vampire', 'B', null, true, 'Library', 5.0, false, true),
+    ('ee338221-ead9-4b89-8b0c-12745c4ca13d', '49c7b7c6-c8dc-4871-9103-b057d2034c3e', 'Vampire Sovereign', 'Uncommon', 'UNLOCK', 'M19', 5, 'Creature — Vampire Noble', 'B', null, true, 'Library', 4.0, false, false),
+    ('344a26ab-524f-4daa-ae0a-9d94e34c96df', 'fea95888-e16a-4209-9cd4-623f7f4d2f67', 'Walking Corpse', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Zombie', 'B', null, true, 'Library', 5.0, false, true),
+    ('9160dde8-cd77-4967-a5f3-a676376c58f7', '9d08af23-9f4a-4097-9abc-3b17475ab744', 'Act of Treason', 'Common', 'UNLIMITED', 'M19', 3, 'Sorcery', 'R', null, true, 'Gym', 5.0, false, true),
+    ('2435c810-2baf-4e3b-80ce-542b94694901', '8b46b50c-f824-4c4e-86de-38065c6f9a64', 'Alpine Moon', 'Rare', 'UNLOCK', 'M19', 1, 'Enchantment', 'R', null, true, 'Gym', 2.0, false, false),
+    ('c827bccf-38f9-4a7c-bd0e-038594a9f63b', 'd06eedb4-bd5a-4864-9505-a570a745d165', 'Apex of Power', 'Mythic', 'UNIQUE', 'M19', 10, 'Sorcery', 'R', null, false, 'Gym', 0.1, false, false),
+    ('5b012532-1186-4dc8-9d42-867e418b0280', '5eff8a06-e0d6-435a-a7c0-db9f9d98636a', 'Banefire', 'Rare', 'UNLOCK', 'M19', 1, 'Sorcery', 'R', null, true, 'Gym', 2.0, false, false),
+    ('32b7438d-e905-4627-9299-e2224377c8e7', '880793a2-84b0-4ae1-9bb8-6e942e3dc723', 'Boggart Brute', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Goblin Warrior', 'R', null, true, 'Gym', 5.0, false, true),
+    ('e83a678b-19d4-47a5-aa1c-c2437e5009c0', '7779525d-080d-4669-bb65-af532bf0983e', 'Catalyst Elemental', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Elemental', 'R', null, true, 'Gym', 5.0, false, true),
+    ('a9737a83-8c58-44b5-816e-d8df8a577921', '41c15160-ee8c-42e3-bc6c-593b8c8ae335', 'Crash Through', 'Common', 'UNLIMITED', 'M19', 1, 'Sorcery', 'R', null, true, 'Gym', 5.0, false, true),
+    ('69a57bfc-1de2-4b3a-84bc-19ec41087f0d', '17917b7a-2b2b-4a96-a21e-10cd91375660', 'Dark-Dweller Oracle', 'Rare', 'UNLOCK', 'M19', 2, 'Creature — Goblin Shaman', 'R', null, true, 'Gym', 2.0, false, false),
+    ('31b73282-6207-4207-8b9c-86a8f9a263a2', 'c8f1e3bd-bbf0-4750-b054-03553fc61850', 'Demanding Dragon', 'Rare', 'UNLOCK', 'M19', 5, 'Creature — Dragon', 'R', null, true, 'Gym', 2.0, false, false),
+    ('a0d0a9fa-75c9-4492-accd-bc9f79407453', 'f040310d-d6ac-4d77-9f76-ca325eddf306', 'Dismissive Pyromancer', 'Rare', 'UNLOCK', 'M19', 2, 'Creature — Human Wizard', 'R', null, true, 'Gym', 2.0, false, false),
+    ('be8875d8-fe8c-4721-aa8d-978bf72e9c26', '946675f5-8998-4f1b-934b-85ffe6e2f002', 'Doublecast', 'Uncommon', 'UNLOCK', 'M19', 2, 'Sorcery', 'R', null, true, 'Gym', 4.0, false, false),
+    ('d330ce5b-de86-42ad-ac00-3ae1d3252956', '8f561498-66e7-4cbf-8cb9-e6fd4717993d', 'Dragon Egg', 'Uncommon', 'UNLOCK', 'M19', 3, 'Creature — Dragon Egg', 'R', null, true, 'Gym', 4.0, false, false),
+    ('60bee89d-d916-4095-830f-6270f8c4f0d8', 'da952213-9a3c-4e13-bc5a-55d1e5dbaa5b', 'Electrify', 'Common', 'UNLIMITED', 'M19', 4, 'Instant', 'R', null, true, 'Gym', 5.0, false, true),
+    ('3e38127d-63af-4d26-9ff5-358c8a61f39c', 'afa3eb61-624c-4abe-bf1e-58fa3b4c14a6', 'Fiery Finish', 'Uncommon', 'UNLOCK', 'M19', 6, 'Sorcery', 'R', null, true, 'Gym', 4.0, false, false),
+    ('fcca2f76-3db9-472b-b78e-a87b81e31d0a', '3912d21e-1ebc-4a81-9dc9-f404248d564a', 'Fire Elemental', 'Common', 'UNLIMITED', 'M19', 5, 'Creature — Elemental', 'R', null, true, 'Gym', 5.0, false, true),
+    ('90cef94d-d941-4e08-afec-a116626b74fb', '8b022754-6d16-470e-b754-4df6e4f4709e', 'Goblin Instigator', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Goblin Rogue', 'R', null, true, 'Gym', 5.0, false, true),
+    ('94b3a4fb-9024-45ef-a54b-cf3a9fa5b9c2', 'df67597f-42a8-4fa7-b426-d7db8b384445', 'Goblin Motivator', 'Common', 'UNLIMITED', 'M19', 1, 'Creature — Goblin Warrior', 'R', null, true, 'Gym', 5.0, false, true),
+    ('2bc69988-3c2d-4b76-a8c0-05926b9bbd08', '0283bf5e-ddf2-4a4a-a7cf-d3e27eed7e7d', 'Goblin Trashmaster', 'Rare', 'UNLOCK', 'M19', 4, 'Creature — Goblin Warrior', 'R', null, true, 'Gym', 2.0, false, false),
+    ('bbc0f3e7-a287-4624-8266-ca617448fcaa', 'c6bdaf76-6a03-4695-9c4b-f040e73435af', 'Guttersnipe', 'Uncommon', 'UNLOCK', 'M19', 3, 'Creature — Goblin Shaman', 'R', null, true, 'Gym', 4.0, false, false),
+    ('2f003678-0f17-4f1d-87d5-83613a82044b', 'be1c2607-091a-41e7-ae4c-73c7e5689739', 'Havoc Devils', 'Common', 'UNLIMITED', 'M19', 4, 'Creature — Devil', 'R', null, true, 'Gym', 5.0, false, true),
+    ('ad6d0a11-3a9c-4de0-9a46-06d2b9356eb7', 'e050a0a3-f48e-4cba-9cd4-692a92261c9f', 'Hostile Minotaur', 'Common', 'UNLIMITED', 'M19', 4, 'Creature — Minotaur', 'R', null, true, 'Gym', 5.0, false, true),
+    ('9cd11004-5b8f-4c71-bde0-eb75eed869b0', '68c88a4c-8c2b-4e6f-b835-7e269eb073c8', 'Inferno Hellion', 'Uncommon', 'UNLOCK', 'M19', 4, 'Creature — Hellion', 'R', null, true, 'Gym', 4.0, false, false),
+    ('54a4c37d-5eeb-42c9-9688-c2ed0d5044cd', '15fef45d-f1a9-49b2-abaa-fe77bb9d1afd', 'Lathliss, Dragon Queen', 'Rare', 'UNLOCK', 'M19', 6, 'Legendary Creature — Dragon', 'R', null, true, 'Gym', 2.0, true, false),
+    ('c3dab325-8f4f-4288-9f3f-960e52b4335b', '387b6b07-a283-412d-94c3-f7f1dc76e858', 'Lava Axe', 'Common', 'UNLIMITED', 'M19', 5, 'Sorcery', 'R', null, true, 'Gym', 5.0, false, true),
+    ('2ca822a3-4793-4cbc-a2f3-f43985e7ce8f', '7c7948c6-5144-4df0-8e33-117710ae00af', 'Lightning Mare', 'Uncommon', 'UNLOCK', 'M19', 2, 'Creature — Elemental Horse', 'R', null, true, 'Gym', 4.0, false, false),
+    ('084b7337-c06f-4cbf-8fc0-0b20c221f1dc', 'f34b9bc4-7bfe-47fd-ba23-4eeeb46026eb', 'Lightning Strike', 'Uncommon', 'UNLOCK', 'M19', 2, 'Instant', 'R', null, true, 'Gym', 4.0, false, false),
+    ('9e016da6-8800-47b4-9b96-1887677c795c', 'fa10cacb-ab14-447a-b411-9d74bc3772fb', 'Onakke Ogre', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Ogre Warrior', 'R', null, true, 'Gym', 5.0, false, true),
+    ('3553a70e-75de-4a8c-9b20-92cd4a317101', '074cbe14-a0c8-4772-955a-b4052333d6ce', 'Sarkhan, Fireblood', 'Mythic', 'UNIQUE', 'M19', 3, 'Legendary Planeswalker — Sarkhan', 'R', null, false, 'Gym', 0.1, false, false),
+    ('edfa8c8c-8013-46d5-8e80-3d9285fe81c8', 'c27c9514-7b5a-461a-a109-f8abafd83523', 'Sarkhan''s Unsealing', 'Rare', 'UNLOCK', 'M19', 4, 'Enchantment', 'R', null, true, 'Gym', 2.0, false, false),
+    ('bf5a0e1e-5239-41f3-a63f-d9303b1b01fc', 'a9d288b8-cdc1-4e55-a0c9-d6edfc95e65d', 'Shock', 'Common', 'UNLIMITED', 'M19', 1, 'Instant', 'R', null, true, 'Gym', 5.0, false, true),
+    ('ede2b911-8eec-4993-ab1c-59b55dfb11b4', 'fcd281e3-f336-449f-a887-4b98dc14dfe7', 'Siegebreaker Giant', 'Uncommon', 'UNLOCK', 'M19', 5, 'Creature — Giant Warrior', 'R', null, true, 'Gym', 4.0, false, false),
+    ('9a13293d-89a7-400c-8309-9f62eeb4769c', 'b5f4b732-099c-46e7-a03d-d8e4c78245b8', 'Smelt', 'Common', 'UNLIMITED', 'M19', 1, 'Instant', 'R', null, true, 'Gym', 5.0, false, true),
+    ('bc0dbc86-cc12-49e7-9721-dd52b35efcbe', '1817acd5-5ed0-47b8-8e56-4715a488867e', 'Sparktongue Dragon', 'Common', 'UNLIMITED', 'M19', 5, 'Creature — Dragon', 'R', null, true, 'Gym', 5.0, false, true),
+    ('94df6198-10c0-44e7-8226-dc96d12957c4', 'f63278e0-3c67-421d-87ce-67725e5e74df', 'Spit Flame', 'Rare', 'UNLOCK', 'M19', 3, 'Instant', 'R', null, true, 'Gym', 2.0, false, false),
+    ('1e618ab0-b092-499c-b5e9-d374433ff19c', 'fb694e7e-f66e-4958-b6ed-aa74bc9ac43e', 'Sure Strike', 'Common', 'UNLIMITED', 'M19', 2, 'Instant', 'R', null, true, 'Gym', 5.0, false, true),
+    ('31b4db74-0c34-442f-a3f9-38194a75ef7b', 'b94fcdd2-7e50-439c-b5eb-aaa9ec7dee08', 'Tectonic Rift', 'Uncommon', 'UNLOCK', 'M19', 4, 'Sorcery', 'R', null, true, 'Gym', 4.0, false, false),
+    ('11bed78a-c579-424a-8fcc-322ce2630dbc', '5d2a9859-1353-4431-9343-f5999450acd1', 'Thud', 'Uncommon', 'UNLOCK', 'M19', 1, 'Sorcery', 'R', null, true, 'Gym', 4.0, false, false),
+    ('48dbbc83-5549-480f-bf98-da90495d2a29', 'f307b5b4-e949-4f69-8dc7-856e33a45a16', 'Tormenting Voice', 'Common', 'UNLIMITED', 'M19', 2, 'Sorcery', 'R', null, true, 'Gym', 5.0, false, true),
+    ('c676a5b0-bd46-46b3-b71b-a50b86c9b0bd', 'd3b408e7-4d39-47a3-b00c-846903f8ae77', 'Trumpet Blast', 'Common', 'UNLIMITED', 'M19', 3, 'Instant', 'R', null, true, 'Gym', 5.0, false, true),
+    ('a82fdb2f-b199-44ff-9615-90fc074cb8b0', '5e78e6e0-60f0-4c3c-b8dd-bd673f5152b8', 'Viashino Pyromancer', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Lizard Wizard', 'R', null, true, 'Gym', 5.0, false, true),
+    ('ade02a6b-0025-418b-8e20-0eb538fd66b1', '994db177-03f5-43dd-bf7b-2994e8d430d3', 'Volcanic Dragon', 'Uncommon', 'UNLOCK', 'M19', 6, 'Creature — Dragon', 'R', null, true, 'Gym', 4.0, false, false),
+    ('164960fc-6e80-4a53-90d7-5a18c0a28083', 'bf4268e6-170a-445b-b215-718f7494ae28', 'Volley Veteran', 'Uncommon', 'UNLOCK', 'M19', 4, 'Creature — Goblin Warrior', 'R', null, true, 'Gym', 4.0, false, false),
+    ('1b01d243-9f68-47c7-980b-1418e5f2f3e9', '80ea56ad-e741-4a85-b4e8-ce62e7d593d5', 'Blanchwood Armor', 'Uncommon', 'UNLOCK', 'M19', 3, 'Enchantment — Aura', 'G', null, true, 'Engineering', 4.0, false, false),
+    ('999030b2-2f91-4c45-981f-acdbbf9034af', 'f4aed3d2-04f5-49a4-a6be-d3cf097903f8', 'Bristling Boar', 'Common', 'UNLIMITED', 'M19', 4, 'Creature — Boar', 'G', null, true, 'Engineering', 5.0, false, true),
+    ('bae6eb55-4bf9-4418-b667-a9a761f91ef9', '2f5bf099-2e01-4e1c-9ebf-0ce0ac66939e', 'Centaur Courser', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Centaur Warrior', 'G', null, true, 'Engineering', 5.0, false, true),
+    ('80d4ce4f-8255-419b-9e7f-544d9798e5c8', '08c7db90-c0cf-4482-b7ee-bb033e5996d2', 'Colossal Dreadmaw', 'Common', 'UNLIMITED', 'M19', 6, 'Creature — Dinosaur', 'G', null, true, 'Engineering', 5.0, false, true),
+    ('93f99796-ddc5-4ccd-b925-35622a8648b8', 'cac95494-0db0-4bec-8665-998431a6f76b', 'Colossal Majesty', 'Uncommon', 'UNLOCK', 'M19', 3, 'Enchantment', 'G', null, true, 'Engineering', 4.0, false, false),
+    ('7bc8325b-c7a8-49a5-8a54-a419800ffb93', 'ea4d30c7-7c39-46d5-9b71-a7ebc3e219a1', 'Daggerback Basilisk', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Basilisk', 'G', null, true, 'Engineering', 5.0, false, true),
+    ('78271f34-f62e-4771-b430-b121097b8fb6', 'db640c5b-4548-44b1-a9cd-cc6838707dbb', 'Declare Dominance', 'Uncommon', 'UNLOCK', 'M19', 5, 'Sorcery', 'G', null, true, 'Engineering', 4.0, false, false),
+    ('19ca91ea-dffd-44a9-a54a-c664d83c357b', '06c12fcc-1c08-40a0-a0da-e139c42f083f', 'Druid of Horns', 'Uncommon', 'UNLOCK', 'M19', 4, 'Creature — Human Druid', 'G', null, true, 'Engineering', 4.0, false, false),
+    ('76ceff1d-9e83-41cc-b54b-8bf90d985da9', 'b1793c3b-25d6-4fae-a99d-cfdd2210ca67', 'Druid of the Cowl', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Elf Druid', 'G', null, true, 'Engineering', 5.0, false, true),
+    ('30171803-1e7b-430b-a0de-2dfd2f1115ac', '5c43c1d7-1899-45c1-992b-443873890d78', 'Dryad Greenseeker', 'Uncommon', 'UNLOCK', 'M19', 2, 'Creature — Dryad', 'G', null, true, 'Engineering', 4.0, false, false),
+    ('4da3b0bc-84da-4b85-992b-d0700c97157c', 'a8f5440e-5d4b-420a-8cfd-27a3c72be0d2', 'Elvish Clancaller', 'Rare', 'UNLOCK', 'M19', 2, 'Creature — Elf Druid', 'G', null, true, 'Engineering', 2.0, false, false),
+    ('d0299b00-b16c-4e7d-b67a-ec160ea81a54', '71d14755-b81d-4aec-b94d-1637884a5844', 'Elvish Rejuvenator', 'Common', 'UNLIMITED', 'M19', 3, 'Creature — Elf Druid', 'G', null, true, 'Engineering', 5.0, false, true),
+    ('d470e441-3520-4669-aaa5-f0c57829352a', 'bdd0d01d-b9f2-4c3f-9b3b-04e122013de5', 'Ghastbark Twins', 'Uncommon', 'UNLOCK', 'M19', 7, 'Creature — Treefolk', 'G', null, true, 'Engineering', 4.0, false, false),
+    ('06582256-37d4-442d-b452-9cd93d285d2f', '92d5bb7e-08ba-448e-8763-f47c89505e80', 'Ghirapur Guide', 'Uncommon', 'UNLOCK', 'M19', 3, 'Creature — Elf Scout', 'G', null, true, 'Engineering', 4.0, false, false),
+    ('80996b0d-cd44-445e-96de-677e0018255c', 'e740ce2f-2134-473c-afa1-1b6d2d1e38ef', 'Giant Spider', 'Common', 'UNLIMITED', 'M19', 4, 'Creature — Spider', 'G', null, true, 'Engineering', 5.0, false, true),
+    ('c0338075-5e84-4a37-957a-9cf23ac261ab', '43a86d36-9653-4498-a533-8b30b919cdbf', 'Gift of Paradise', 'Uncommon', 'UNLOCK', 'M19', 3, 'Enchantment — Aura', 'G', null, true, 'Engineering', 4.0, false, false),
+    ('c1db84d8-d426-4c0d-b44e-5be7b0f5f5bf', 'e666bae7-dd51-4921-8b89-7e8d423caba0', 'Gigantosaurus', 'Rare', 'UNLOCK', 'M19', 5, 'Creature — Dinosaur', 'G', null, true, 'Engineering', 2.0, false, false),
+    ('36d4574a-3266-4497-b145-fb25820d8a7f', 'befb211f-37ca-4083-98d4-9ff1f28be3f2', 'Goreclaw, Terror of Qal Sisma', 'Rare', 'UNLOCK', 'M19', 4, 'Legendary Creature — Bear', 'G', null, true, 'Engineering', 2.0, true, false),
+    ('2eebdd18-6930-42e0-b589-fe15820db6e1', '8178c546-84f8-4563-a804-6489ec016660', 'Greenwood Sentinel', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Elf Scout', 'G', null, true, 'Engineering', 5.0, false, true),
+    ('4ec59964-42c1-4c29-8c60-37b7f376c347', '0e0d40a6-e0a4-4fb2-be72-314f7d66b7eb', 'Highland Game', 'Common', 'UNLIMITED', 'M19', 2, 'Creature — Elk', 'G', null, true, 'Engineering', 5.0, false, true),
+    ('84127b83-e75a-4f12-92ca-46f50bb89699', 'd1dde190-8124-4590-9507-801ea4c8cde3', 'Hungering Hydra', 'Rare', 'UNLOCK', 'M19', 1, 'Creature — Hydra', 'G', null, true, 'Engineering', 2.0, false, false),
+    ('390c40ba-2464-44ae-8d67-93c72ab3c425', 'bdb3ca68-ec1f-4e16-81cc-d23f8f52c728', 'Naturalize', 'Common', 'UNLIMITED', 'M19', 2, 'Instant', 'G', null, true, 'Engineering', 5.0, false, true),
+    ('0bf71f42-6e42-46c0-9e8f-394d2c4519ee', 'b254fefb-11d2-4369-ae5c-0c3bd48ae580', 'Oakenform', 'Common', 'UNLIMITED', 'M19', 3, 'Enchantment — Aura', 'G', null, true, 'Engineering', 5.0, false, true),
+    ('00906b47-6316-4e00-bbf5-b801ab583f4f', 'd36075c2-de66-4202-9217-b1102a2bc14b', 'Pelakka Wurm', 'Rare', 'UNLOCK', 'M19', 7, 'Creature — Wurm', 'G', null, true, 'Engineering', 2.0, false, false),
+    ('78a29ddb-fc76-407a-aa58-ec92d011bd44', '85bde6ac-3dd4-4946-8b57-24f57e3eae2b', 'Plummet', 'Common', 'UNLIMITED', 'M19', 2, 'Instant', 'G', null, true, 'Engineering', 5.0, false, true),
+    ('ba2b0966-4e9e-44dc-9145-3c1e644578bc', '15d63e5d-dc4d-4e5f-8043-78039a49732b', 'Prodigious Growth', 'Rare', 'UNLOCK', 'M19', 6, 'Enchantment — Aura', 'G', null, true, 'Engineering', 2.0, false, false),
+    ('bbe53385-d63f-4d07-94ed-3ea5a48c79c8', '6d5dc34b-3eea-4b77-8db7-94bc30b14c4c', 'Rabid Bite', 'Common', 'UNLIMITED', 'M19', 2, 'Sorcery', 'G', null, true, 'Engineering', 5.0, false, true),
+    ('2951026c-69bb-4ffc-a24f-b0795a12aa79', '032ec6e2-6cc3-4a97-9cc7-3233f5e11904', 'Reclamation Sage', 'Uncommon', 'UNLOCK', 'M19', 3, 'Creature — Elf Shaman', 'G', null, true, 'Engineering', 4.0, false, false),
+    ('f127214f-3e91-4988-b593-1568d0ae1718', '5b38fafb-3999-46dc-928b-1677625c1943', 'Recollect', 'Uncommon', 'UNLOCK', 'M19', 3, 'Sorcery', 'G', null, true, 'Engineering', 4.0, false, false),
+    ('281f04d5-af45-4494-ac11-a605d3a06643', 'd26d1cce-3bcf-48d4-abce-8b12ca7b7432', 'Rhox Oracle', 'Common', 'UNLIMITED', 'M19', 5, 'Creature — Rhino Monk', 'G', null, true, 'Engineering', 5.0, false, true),
+    ('76b01fd2-139a-47ed-a8e3-021aa9c91b02', 'cbf743a5-123f-4747-826d-7f8bb929a52c', 'Root Snare', 'Common', 'UNLIMITED', 'M19', 2, 'Instant', 'G', null, true, 'Engineering', 5.0, false, true),
+    ('b445a0f0-2cca-4223-bd27-940d2cb6d29c', '48e8ae59-a234-498e-9dae-bac8d1424ea5', 'Runic Armasaur', 'Rare', 'UNLOCK', 'M19', 3, 'Creature — Dinosaur', 'G', null, true, 'Engineering', 2.0, false, false),
+    ('175e21a3-00f7-4c51-8a8e-fbfd7089efda', 'c235015e-a7a9-4f8d-bf4a-cf68b3847f83', 'Scapeshift', 'Mythic', 'UNIQUE', 'M19', 4, 'Sorcery', 'G', null, false, 'Engineering', 0.1, false, false),
+    ('9ffa2e83-bc78-4bde-9692-e5165c4ef63b', '2ff309e3-90e0-40e7-a277-3df057f8f198', 'Talons of Wildwood', 'Common', 'UNLIMITED', 'M19', 2, 'Enchantment — Aura', 'G', null, true, 'Engineering', 5.0, false, true),
+    ('0812e942-eb78-48c8-857e-5f0ff1bd777b', '2b761ce6-4fb1-4f22-b51c-d9f25f62b39a', 'Thorn Lieutenant', 'Rare', 'UNLOCK', 'M19', 2, 'Creature — Elf Warrior', 'G', null, true, 'Engineering', 2.0, false, false),
+    ('fc0f3812-bb6c-4d99-b505-9dfd84e3fd95', 'c5c221e6-dafe-4661-b920-3faed9551802', 'Thornhide Wolves', 'Common', 'UNLIMITED', 'M19', 5, 'Creature — Wolf', 'G', null, true, 'Engineering', 5.0, false, true),
+    ('fe574e49-723a-409b-9222-125eebb620ff', '61e09dd9-7870-48c2-9177-d6abc3162692', 'Titanic Growth', 'Common', 'UNLIMITED', 'M19', 2, 'Instant', 'G', null, true, 'Engineering', 5.0, false, true),
+    ('34ad8e5d-0c26-4588-8161-b22197715d63', 'caf1bc69-a8d7-454b-9cc6-2e4d003776a8', 'Vigilant Baloth', 'Uncommon', 'UNLOCK', 'M19', 5, 'Creature — Beast', 'G', null, true, 'Engineering', 4.0, false, false),
+    ('b9980835-cd32-4870-88df-c79cd5534968', '499c7ee3-08a3-4f40-809a-3f7087ab9b24', 'Vine Mare', 'Uncommon', 'UNLOCK', 'M19', 4, 'Creature — Elemental Horse', 'G', null, true, 'Engineering', 4.0, false, false),
+    ('681fbd66-b622-4f20-a860-f101aff21109', 'b5f20a6d-8c3e-452f-9d98-4886f0fa052a', 'Vivien Reid', 'Mythic', 'UNIQUE', 'M19', 5, 'Legendary Planeswalker — Vivien', 'G', null, false, 'Engineering', 0.1, false, false),
+    ('784c4711-223d-4b95-a163-87e57f87b8db', '5e2b30d2-81e9-40cd-86dd-3ec5dd06ced0', 'Vivien''s Invocation', 'Rare', 'UNLOCK', 'M19', 7, 'Sorcery', 'G', null, true, 'Engineering', 2.0, false, false),
+    ('7327e768-d90d-4677-b4dd-10837ffe8be2', '51ce0158-c9a5-4fa5-9704-46ab02f01b86', 'Wall of Vines', 'Common', 'UNLIMITED', 'M19', 1, 'Creature — Plant Wall', 'G', null, true, 'Engineering', 5.0, false, true),
+    ('5314bae2-4930-4f8a-8a52-853bc3feb88f', '27f5969e-d613-4cbc-87af-98899bb5c58a', 'Aerial Engineer', 'Uncommon', 'UNLOCK', 'M19', 4, 'Creature — Human Artificer', 'WU', null, true, 'Library', 4.0, false, false),
+    ('1e90c638-d4b2-4243-bbc4-1cc10516c40f', 'e7fc5ad6-f2f0-4b06-a61b-05022db9d93b', 'Arcades, the Strategist', 'Mythic', 'UNIQUE', 'M19', 4, 'Legendary Creature — Elder Dragon', 'WUG', null, false, 'Library', 0.1, true, false),
+    ('38b9f9d7-a00d-4a90-9d7a-88ece10af328', '0156bfbc-26bc-4699-a7ff-437f7c043716', 'Brawl-Bash Ogre', 'Uncommon', 'UNLOCK', 'M19', 4, 'Creature — Ogre Warrior', 'BR', null, true, 'Library', 4.0, false, false),
+    ('50c1de2c-1acc-47c8-9b5e-a9dae3da8a49', '58d8ff36-4a4d-40e0-b812-3d23b2c7606a', 'Chromium, the Mutable', 'Mythic', 'UNIQUE', 'M19', 7, 'Legendary Creature — Elder Dragon', 'WUB', null, false, 'Library', 0.1, true, false),
+    ('a353510a-30de-4891-97b9-d7d556531c41', '781cee5f-f9cb-42ed-b408-543d297bf96d', 'Draconic Disciple', 'Uncommon', 'UNLOCK', 'M19', 3, 'Creature — Human Shaman', 'RG', null, true, 'Gym', 4.0, false, false),
+    ('6e0def77-3528-40fb-a6b2-c3d1e31ade65', '62007675-8a0d-4211-83b2-0daf3641dedc', 'Enigma Drake', 'Uncommon', 'UNLOCK', 'M19', 3, 'Creature — Drake', 'UR', null, true, 'Building B', 4.0, false, false),
+    ('33c35bf8-ae43-41aa-aae9-4d7513f9058c', 'c442e8b0-a0a4-4839-8049-125b91b15c99', 'Heroic Reinforcements', 'Uncommon', 'UNLOCK', 'M19', 4, 'Sorcery', 'WR', null, true, 'Library', 4.0, false, false),
+    ('7b215968-93a6-4278-ac61-4e3e8c3c3943', '55e4b27e-5447-4fc2-8cae-a03e344600c6', 'Nicol Bolas, the Ravager', 'Mythic', 'UNIQUE', 'M19', 4, 'Legendary Creature — Elder Dragon', 'UBR', null, false, 'Building B', 0.1, true, false),
+    ('4663bd13-243e-4b8c-9ca8-158576b58803', '4c2b10ba-1930-4da8-9570-c89b2e239e3e', 'Palladia-Mors, the Ruiner', 'Mythic', 'UNIQUE', 'M19', 6, 'Legendary Creature — Elder Dragon', 'WRG', null, false, 'Library', 0.1, true, false),
+    ('5e058ff8-043c-498b-8310-0ca45466ac27', 'd0e810bb-5f38-4045-a718-30d423c05659', 'Poison-Tip Archer', 'Uncommon', 'UNLOCK', 'M19', 4, 'Creature — Elf Archer', 'BG', null, true, 'Library', 4.0, false, false),
+    ('3188e533-9a72-4a02-b169-a918f7c095ba', '34439fb2-0272-4624-aa4c-9ea439b60489', 'Psychic Symbiont', 'Uncommon', 'UNLOCK', 'M19', 6, 'Creature — Nightmare Horror', 'UB', null, true, 'Building B', 4.0, false, false),
+    ('65a75d3a-58cb-4ee0-88d3-52099cb57ac3', 'ce9d3382-23ca-4d35-ad30-5e2b75517012', 'Regal Bloodlord', 'Uncommon', 'UNLOCK', 'M19', 5, 'Creature — Vampire Soldier', 'WB', null, true, 'Library', 4.0, false, false),
+    ('e31c544f-a748-4180-8366-9bb1622bb99d', 'aa321138-b1a7-4b8e-a2ca-b9ce65704e92', 'Satyr Enchanter', 'Uncommon', 'UNLOCK', 'M19', 3, 'Creature — Satyr Druid', 'WG', null, true, 'Library', 4.0, false, false),
+    ('650461af-081b-4cc9-a140-865a666f1443', '104386d9-93b4-4a18-86d5-68718b474f4a', 'Skyrider Patrol', 'Uncommon', 'UNLOCK', 'M19', 4, 'Creature — Elf Scout', 'UG', null, true, 'Building B', 4.0, false, false),
+    ('d19fdc00-21eb-48dc-966a-6b634dc5a2c4', 'c42ce2e9-4dfe-468a-8f41-49e187cb91d4', 'Vaevictis Asmadi, the Dire', 'Mythic', 'UNIQUE', 'M19', 6, 'Legendary Creature — Elder Dragon', 'BRG', null, false, 'Library', 0.1, true, false),
+    ('d45ac8dc-281f-4257-9658-80af65a0295b', '98709d61-4da4-4d3a-a654-bb2a7a0edb6b', 'Amulet of Safekeeping', 'Rare', 'UNLOCK', 'M19', 2, 'Artifact', '', null, true, 'Special', 2.0, false, false),
+    ('0ce4702d-f65b-413e-99da-112f632a0a63', 'd91ea728-2d69-42cb-bb5d-e2b058f0d7b1', 'Arcane Encyclopedia', 'Uncommon', 'UNLOCK', 'M19', 3, 'Artifact — Book', '', null, true, 'Special', 4.0, false, false),
+    ('62ff0730-6dd9-42d2-be0d-655d04adf229', '0b95c115-6745-4ce1-896b-9021e93c161e', 'Chaos Wand', 'Rare', 'UNLOCK', 'M19', 3, 'Artifact', '', null, true, 'Special', 2.0, false, false),
+    ('eb28b35c-28a5-4042-b21d-6d43658a16eb', '33c722cf-b4bf-431f-aefd-ee96241a7fbf', 'Crucible of Worlds', 'Mythic', 'UNIQUE', 'M19', 3, 'Artifact', '', null, false, 'Special', 0.1, false, false),
+    ('458ce930-c100-4ef5-b75a-a18051282f8c', '07ff619a-21ee-44b6-b666-ceab4a78096a', 'Desecrated Tomb', 'Rare', 'UNLOCK', 'M19', 3, 'Artifact', '', null, true, 'Special', 2.0, false, false),
+    ('ca600b3f-2c70-489b-b218-6e3245b90114', '9a440122-a015-4af2-b270-37f019884458', 'Diamond Mare', 'Uncommon', 'UNLOCK', 'M19', 2, 'Artifact Creature — Horse', '', null, true, 'Special', 4.0, false, false),
+    ('5b441fc8-bc89-47d4-8745-2525aeb6d98d', '8cf77dc4-763b-41b7-a5da-0ef2734f08e6', 'Dragon''s Hoard', 'Rare', 'UNLOCK', 'M19', 3, 'Artifact', '', null, true, 'Special', 2.0, false, false),
+    ('608f431b-a05c-4610-94f7-928d87b2c056', 'ab8301da-f9f7-4d90-afae-bd7e60834c22', 'Explosive Apparatus', 'Common', 'UNLIMITED', 'M19', 1, 'Artifact', '', null, true, 'Special', 5.0, false, true),
+    ('e148c1bf-84a2-48cd-882e-ad0fd74b8f0f', 'e6584e39-099c-437f-9239-fa718cac85af', 'Field Creeper', 'Common', 'UNLIMITED', 'M19', 2, 'Artifact Creature — Scarecrow', '', null, true, 'Special', 5.0, false, true),
+    ('26894980-8961-4479-85dd-5f01c899718b', 'df024c55-c008-48ec-a1a5-02ce336e3de6', 'Fountain of Renewal', 'Uncommon', 'UNLOCK', 'M19', 1, 'Artifact', '', null, true, 'Special', 4.0, false, false),
+    ('381e9f97-9655-4f41-9829-4ac26c2ed6ac', '893f319f-6e3d-4230-bb65-4f9179b18fad', 'Gargoyle Sentinel', 'Uncommon', 'UNLOCK', 'M19', 3, 'Artifact Creature — Gargoyle', '', null, true, 'Special', 4.0, false, false),
+    ('1d532b01-8bf7-4a27-a438-db03bcd00694', '0c0f7092-3fe6-4a6e-8b4e-803810b43e50', 'Gearsmith Guardian', 'Common', 'UNLIMITED', 'M19', 5, 'Artifact Creature — Construct', '', null, true, 'Special', 5.0, false, true),
+    ('ecf1f24f-d910-4ec6-95d2-0ecaf9f051aa', '487485a6-cf79-48c0-bea9-0ec6b3ee253c', 'Magistrate''s Scepter', 'Rare', 'UNLOCK', 'M19', 3, 'Artifact', '', null, true, 'Special', 2.0, false, false),
+    ('9dfba61f-9a6d-43e3-ad28-f74f737ef186', 'bd9e416a-89b3-4912-be9b-49fce6a93dc9', 'Manalith', 'Common', 'UNLIMITED', 'M19', 3, 'Artifact', '', null, true, 'Special', 5.0, false, true),
+    ('a2ca16ee-e415-4270-a453-47111d07a07f', '5d0e49fa-5dfb-48c2-af97-fdfb788d5f40', 'Marauder''s Axe', 'Common', 'UNLIMITED', 'M19', 2, 'Artifact — Equipment', '', null, true, 'Special', 5.0, false, true),
+    ('1bdb0b15-d651-4730-8be9-d0e01145311b', 'd9f11aa1-9219-42a8-85a9-a8f204160706', 'Meteor Golem', 'Uncommon', 'UNLOCK', 'M19', 7, 'Artifact Creature — Golem', '', null, true, 'Special', 4.0, false, false),
+    ('c2051fd0-99cf-4e11-a625-8294e6767e5b', '3212e47a-5492-4c50-9d4a-6ea562f1a6e1', 'Millstone', 'Uncommon', 'UNLOCK', 'M19', 2, 'Artifact', '', null, true, 'Special', 4.0, false, false),
+    ('1c3c7d24-7d5c-49de-b9f8-35c6d6c8c52a', '308d7868-49f9-47a3-a7b1-4b0332d610f1', 'Rogue''s Gloves', 'Uncommon', 'UNLOCK', 'M19', 2, 'Artifact — Equipment', '', null, true, 'Special', 4.0, false, false),
+    ('497d08a8-cffe-4164-a941-d8c8c85644c7', 'f1c4269a-1d99-4f3b-8107-a005df3468d5', 'Sigiled Sword of Valeron', 'Rare', 'UNLOCK', 'M19', 3, 'Artifact — Equipment', '', null, true, 'Special', 2.0, false, false),
+    ('bd2c1fb7-3c1d-49a9-b2c2-78ba2264df38', '974f788a-039f-4310-a2fe-16b14a1e2d35', 'Skyscanner', 'Common', 'UNLIMITED', 'M19', 3, 'Artifact Creature — Thopter', '', null, true, 'Special', 5.0, false, true),
+    ('ccf01421-856e-4cdd-8938-148928626f56', 'ca611c90-7753-43dd-af91-81694d004eeb', 'Suspicious Bookcase', 'Uncommon', 'UNLOCK', 'M19', 2, 'Artifact Creature — Wall', '', null, true, 'Special', 4.0, false, false),
+    ('1b06b670-7238-4732-85fd-ac6abebea57f', '921345ce-2eaf-4b95-b65d-1c27204665ed', 'Transmogrifying Wand', 'Rare', 'UNLOCK', 'M19', 3, 'Artifact', '', null, true, 'Special', 2.0, false, false),
+    ('db41b554-2bb1-4f11-be29-233d36cc955a', 'f155a05f-9f5e-4875-a407-103b85ce30ee', 'Cinder Barrens', 'Common', 'UNLIMITED', 'M19', 0, 'Land', '', null, true, 'Special', 5.0, false, true),
+    ('02f99756-d334-4dba-a375-ba3d91ecae62', '93695c16-c441-492d-af12-b57df9739846', 'Detection Tower', 'Rare', 'UNLOCK', 'M19', 0, 'Land', '', null, true, 'Special', 2.0, false, false),
+    ('b376c8c9-cd35-4c2b-8b5b-95ea9735b366', '941b0dd1-0df2-48ee-8829-615e9c3177a7', 'Forsaken Sanctuary', 'Common', 'UNLIMITED', 'M19', 0, 'Land', '', null, true, 'Special', 5.0, false, true),
+    ('6b28e1e1-0813-4e4a-a7a7-058b7787272c', 'ad6a2776-801f-4743-8268-6d654122171e', 'Foul Orchard', 'Common', 'UNLIMITED', 'M19', 0, 'Land', '', null, true, 'Special', 5.0, false, true),
+    ('b538a465-81c6-4282-9ac3-061167ac7dc3', 'c643365a-4255-4d23-adb9-0f8b456f0838', 'Highland Lake', 'Common', 'UNLIMITED', 'M19', 0, 'Land', '', null, true, 'Special', 5.0, false, true),
+    ('f47ee724-da0f-4eb1-b07b-b07e04e9f5b3', '2d9663be-c466-4191-85e2-a69ce0965432', 'Meandering River', 'Common', 'UNLIMITED', 'M19', 0, 'Land', '', null, true, 'Special', 5.0, false, true),
+    ('81766fd6-c7e0-4527-a63e-512d126c0421', 'c23e5b80-08d2-4e24-9908-fe2aa4f30f6f', 'Reliquary Tower', 'Uncommon', 'UNLOCK', 'M19', 0, 'Land', '', null, true, 'Special', 4.0, false, false),
+    ('b7657f02-d1dd-448e-bc0d-c6f25fbc35ea', '7eadffcb-1e15-44c1-b1db-78c71b8ec1ce', 'Rupture Spire', 'Uncommon', 'UNLOCK', 'M19', 0, 'Land', '', null, true, 'Special', 4.0, false, false),
+    ('bac2b853-f788-4b29-a76d-880da61ad91a', '90bccf66-58ec-445d-ac96-c6013054a1b4', 'Stone Quarry', 'Common', 'UNLIMITED', 'M19', 0, 'Land', '', null, true, 'Special', 5.0, false, true),
+    ('df8c56fa-fae6-48ba-813d-0d971b640896', 'f27d52e6-aab9-4f95-ae46-33d1173bf4fe', 'Submerged Boneyard', 'Common', 'UNLIMITED', 'M19', 0, 'Land', '', null, true, 'Special', 5.0, false, true),
+    ('07076412-18fe-4e15-bdb5-17111b4a66db', '00b34fab-5a80-4a4d-b6cf-72479197677a', 'Timber Gorge', 'Common', 'UNLIMITED', 'M19', 0, 'Land', '', null, true, 'Special', 5.0, false, true),
+    ('78b33867-5ccf-49a1-8e9b-9d2ddac78f17', 'a5478263-47c9-447f-9c7a-c77ce0752947', 'Tranquil Expanse', 'Common', 'UNLIMITED', 'M19', 0, 'Land', '', null, true, 'Special', 5.0, false, true),
+    ('303224d6-9769-4127-8e33-9129f337e2a8', 'e887fb3f-d4c9-4022-8f75-1de6ec94af96', 'Woodland Stream', 'Common', 'UNLIMITED', 'M19', 0, 'Land', '', null, true, 'Special', 5.0, false, true)
+) as v (id, oracle_id, forge_name, rarity, ownership_type, set_code, mana_value, types, colors, image_url, discoverable, spawn_region, weight, commander_eligible, requires_unlock)
 where not exists (select 1 from public.cards c where lower(c.forge_name) = lower(v.forge_name))
 on conflict do nothing;

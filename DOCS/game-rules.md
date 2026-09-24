@@ -11,11 +11,12 @@ skipped). Every card has an **ownership type**:
 
 | Type | Count | How you get it | Copies you own |
 | --- | --- | --- | --- |
-| `UNLIMITED` | 119 | Everyone owns it from the start: basic lands, the 10 starter creatures, M19 commons | unlimited |
+| `UNLIMITED` | 119 | **Base 15** (5 basic lands + 10 starter creatures): everyone owns them from the start. **The other 104** (M19 commons, `requires_unlock`): scan any of their codes once | unlimited |
 | `UNLOCK` | 219 | Scan its QR codes (base cards, M19 uncommons and rares) | **one per different code you scan, up to 4** |
 | `UNIQUE` | 19 | Be the first to scan its (single-use) QR code; the card is serialized (#1, #2, …) and can be traded (3 base cards + the 16 M19 mythics) | one per serialized copy you hold |
 
-Imported sets map rarity to ownership: **common → UNLIMITED, uncommon/rare → UNLOCK, mythic → UNIQUE**.
+Imported sets map rarity to ownership: **common → UNLIMITED (scan once to unlock), uncommon/rare → UNLOCK,
+mythic → UNIQUE**. Only the base 15 are owned without scanning.
 Legendary creatures are commander-eligible. Adding another set: [operations.md](operations.md#add-a-card-set).
 
 **Starter creatures** (UNLIMITED): Raging Goblin, Goblin Piker, Vulshok Berserker, Hill Giant, Fire Elemental
@@ -33,7 +34,7 @@ A QR code encodes a claim token (format: [qr-codes.md](qr-codes.md)). Scanning i
 | --- | --- | --- |
 | UNLOCK | **one more copy** of the card (copy 1, 2, 3, 4), **+10 XP × event bonus** each | you already used *this* code, or you already have 4 copies; only the discovery count goes up |
 | UNIQUE | you get the next serial number, **+10 XP × event bonus**; the code is used up | someone already claimed it ("already claimed"), or you already own a copy of that card; the code is **not** used up, so someone else can have it |
-| UNLIMITED | discovery count +1, no XP | always (you own unlimited copies already) |
+| UNLIMITED | locked cards (all but the base 15): the **first** scan of any of its codes unlocks **unlimited copies**, **+10 XP × event bonus** | the card is already unlocked (or is one of the free base 15); only the discovery count goes up |
 
 - **Collecting copies:** a player needs **4 different codes** for the same card to own 4 copies (the Standard
   deck maximum). Scanning the same code again never adds a copy. The scan screen says which copy you got
@@ -69,8 +70,8 @@ Checked whenever a player opens their profile (`sweep_achievements`):
 | FIRST_TRADE | First Trade | complete 1 trade |
 | MASTER_TRADER | Master Trader | complete 5 trades |
 
-"Discoveries" counts every scan (including repeats). "Own" counts UNLIMITED cards, so every player starts at
-119/357 (33%) of the catalog, which already satisfies Collector I (25%).
+"Discoveries" counts every scan (including repeats). "Own" counts the free base 15 plus every card you've
+unlocked, so a new player starts at 15/357 (4%) of the catalog.
 
 ## Decks
 
@@ -80,7 +81,8 @@ Checked whenever a player opens their profile (`sweep_achievements`):
 | **COMMANDER** | exactly 99 + a commander | 1 per card (basic lands unlimited) | required; must be commander-eligible, owned, not banned; all cards within its color identity |
 
 You can only include cards you own, up to the number of copies you own. For UNLOCK cards that means one copy
-per different code you've scanned (so 4 codes → a full playset); UNLIMITED cards need no scanning. Per-format
+per different code you've scanned (so 4 codes → a full playset); an UNLIMITED card gives unlimited copies once
+unlocked (the base 15 need no scanning). Per-format
 legality: `BANNED` cards are rejected; `RESTRICTED` cards are limited to one copy.
 
 The deck builder checks decks with `validate_deck_spec` when saving. The battle engine re-checks with

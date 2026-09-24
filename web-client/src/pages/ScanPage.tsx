@@ -18,16 +18,17 @@ function outcomeMessage(outcome: Outcome): string {
       return `You already scanned this code. Find a different ${card.forgeName} code for another copy (${copiesOwned ?? 1} of ${maxCopies ?? 4}).`
     }
     if (reason === 'MAX_COPIES') return `You have all ${maxCopies ?? 4} copies of ${card.forgeName}.`
-    if (reason === 'UNLIMITED') return `${card.forgeName} is always in your collection (unlimited copies).`
+    if (reason === 'UNLIMITED') return `${card.forgeName} is already unlocked: you have unlimited copies.`
     return 'Already discovered. Keep scanning!'
   }
   return `Claimed ${outcome.result.card.forgeName}!`
 }
 
-/** "+10 XP · copy 2 of 4 · discovery #5" */
+/** "+10 XP · copy 2 of 4 · discovery #5" or "+10 XP · unlimited copies · discovery #1" */
 function successDetail(result: ClaimResult): string {
   const parts = [`+${result.experienceAwarded} XP`]
   if (result.maxCopies && result.copiesOwned) parts.push(`copy ${result.copiesOwned} of ${result.maxCopies}`)
+  else if (result.card.ownershipType === 'UNLIMITED') parts.push('unlimited copies')
   parts.push(`discovery #${result.discoveryCount}`)
   return parts.join(' · ')
 }

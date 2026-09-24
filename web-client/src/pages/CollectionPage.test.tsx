@@ -132,12 +132,12 @@ test('toggles missing filter back to all when clicked twice', async () => {
   render(<MemoryRouter><CollectionPage /></MemoryRouter>)
 
   expect(await screen.findByText('Counterspell')).toBeInTheDocument()
-  fireEvent.click(screen.getByText('Missing'))
+  fireEvent.click(screen.getByText('Missing', { selector: '.chip' }))
 
   await waitFor(() => expect(screen.getByText('Island')).toBeInTheDocument())
   expect(screen.queryByText('Counterspell')).not.toBeInTheDocument()
 
-  fireEvent.click(screen.getByText('Missing'))
+  fireEvent.click(screen.getByText('Missing', { selector: '.chip' }))
 
   await waitFor(() => expect(screen.getByText('Counterspell')).toBeInTheDocument())
   expect(screen.getByText('Island')).toBeInTheDocument()
@@ -256,3 +256,27 @@ test('renders cached cards when the network is unavailable', async () => {
   expect(screen.queryByText('Failed to load collection.')).not.toBeInTheDocument()
 })
 
+
+test('a scan-once common is missing until unlocked, then unlimited', async () => {
+  const archer: CardDto = { ...cards[0], id: '7', oracleId: 'o-archer', forgeName: 'Skeleton Archer', types: 'Creature — Skeleton Archer', requiresUnlock: true }
+  mockedEndpoints.browseCards.mockResolvedValue([cards[0], archer])
+  mockedEndpoints.getCollection.mockResolvedValue([])
+
+  const { unmount } = render(<MemoryRouter><CollectionPage /></MemoryRouter>)
+  await screen.findByText('No cards match.')
+  showAllCards()
+  expect(await screen.findByText('Missing · scan once for unlimited')).toBeInTheDocument()
+  unmount()
+
+  mockedEndpoints.getCollection.mockResolvedValue([
+    { cardId: '7', forgeName: 'Skeleton Archer', ownershipType: 'UNLIMITED', quantity: 2147483647, discoveredCount: 1, favorite: false },
+  ])
+  render(<MemoryRouter><CollectionPage /></MemoryRouter>)
+  expect(await screen.findByText('Skeleton Archer')).toBeInTheDocument()
+  expect(screen.getByText('Unlimited')).toBeInTheDocument()
+})
+
+test('an UNLOCK card shows copies out of 4', async () => {
+  render(<MemoryRouter><CollectionPage /></MemoryRouter>)
+  expect(await screen.findByText('Owned: 2 of 4')).toBeInTheDocument()
+})
