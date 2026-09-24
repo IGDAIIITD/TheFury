@@ -131,7 +131,7 @@ disappears when it stops. **The website never needs a rebuild.**
 ### Step 1: install cloudflared (once)
 
 ```powershell
-winget install --id Cloudflare.cloudflared
+choco install cloudflared -y      # or: winget install --id Cloudflare.cloudflared
 ```
 
 ### Step 2: build the engine (once, and after code changes)

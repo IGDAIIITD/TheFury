@@ -69,13 +69,14 @@ if (-not $Cloudflared) {
     $cmd = Get-Command cloudflared -ErrorAction SilentlyContinue
     $candidates = @(
         $(if ($cmd) { $cmd.Source }),
+        "$env:ProgramData\chocolatey\bin\cloudflared.exe",
         "$env:LOCALAPPDATA\Microsoft\WinGet\Links\cloudflared.exe",
         "${env:ProgramFiles(x86)}\cloudflared\cloudflared.exe",
         "$env:ProgramFiles\cloudflared\cloudflared.exe"
     ) | Where-Object { $_ -and (Test-Path $_) }
     $Cloudflared = $candidates | Select-Object -First 1
 }
-if (-not $Cloudflared) { throw 'cloudflared not found. Install it: winget install --id Cloudflare.cloudflared' }
+if (-not $Cloudflared) { throw 'cloudflared not found. Install it: choco install cloudflared -y  (or winget install --id Cloudflare.cloudflared)' }
 
 $engine = $null
 $tunnel = $null
