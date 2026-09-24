@@ -391,7 +391,7 @@ export default function DeckBuilderPage() {
       <div className="deck-layout">
         <div className="panel">
           <h3>Catalog</h3>
-          <div className="card-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))' }}>
+          <div className="card-grid compact">
             {filtered.length === 0 && <div className="empty">No cards match.</div>}
             {filtered.map((card) => {
               const entry = ownedMap.get(card.id)

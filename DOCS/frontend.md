@@ -9,7 +9,7 @@ origins.
 | Route | Page | Data |
 | --- | --- | --- |
 | `/login` | sign in / register (with cohort) | Supabase Auth |
-| `/collection` | owned cards, favorites, discovery counts | tables (own rows) |
+| `/collection` | catalog + owned cards, filters, favorites, discovery counts. Opens on **Owned**, shows the first 25 matches with a **See all** button | tables (own rows) |
 | `/collection/trades` | offer / accept / decline / cancel trades; live via Realtime | trade RPCs |
 | `/collection/events` | active and upcoming events + live activity feed | `events`, `activity_feed` (Realtime) |
 | `/decks` | deck builder with server-side validation | `decks`, `deck_cards`, `validate_deck_spec` |
@@ -82,6 +82,10 @@ If `VITE_BATTLE_ENGINE_URL` is set, it wins. Otherwise `battleEngineDiscovery.ts
 
 `lib/scryfall.tsx` builds `…/storage/v1/object/public/card-art/<slug>.jpg`. `<CardArt>` hides itself if the
 image is missing. Grids use `loading="lazy"`; the battle board uses `loading="eager"`.
+
+Card grids (`.card-grid`, with `.card-grid.compact` for the deck builder) are responsive. On phones
+(≤ 600px) they always show **three cards per row**, with smaller tiles and the redundant "Ownership" line hidden.
+Don't set grid columns inline, because an inline style overrides the mobile rule.
 
 ## Offline cache
 

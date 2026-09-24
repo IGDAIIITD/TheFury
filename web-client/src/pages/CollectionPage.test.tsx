@@ -87,33 +87,42 @@ beforeEach(() => {
   mockedEndpoints.getCollection.mockResolvedValue(collection)
 })
 
+/** The collection opens on "Owned"; clicking the active chip switches to all cards. */
+const showAllCards = () => fireEvent.click(screen.getByText('Owned'))
+
+test('opens on the Owned filter', async () => {
+  render(<MemoryRouter><CollectionPage /></MemoryRouter>)
+
+  expect(await screen.findByText('Counterspell')).toBeInTheDocument()
+  expect(screen.queryByText('Island')).not.toBeInTheDocument()
+  expect(screen.getByText('Owned')).toHaveClass('active')
+})
+
+test('toggles owned filter off and back on', async () => {
+  render(<MemoryRouter><CollectionPage /></MemoryRouter>)
+
+  expect(await screen.findByText('Counterspell')).toBeInTheDocument()
+  showAllCards()
+
+  await waitFor(() => expect(screen.getByText('Island')).toBeInTheDocument())
+  expect(screen.getByText('Counterspell')).toBeInTheDocument()
+
+  fireEvent.click(screen.getByText('Owned'))
+
+  await waitFor(() => expect(screen.queryByText('Island')).not.toBeInTheDocument())
+  expect(screen.getByText('Counterspell')).toBeInTheDocument()
+})
+
 test('toggles favorites filter back to all when clicked twice', async () => {
   render(<MemoryRouter><CollectionPage /></MemoryRouter>)
 
   expect(await screen.findByText('Counterspell')).toBeInTheDocument()
-  expect(screen.getByText('⭐ Favorites')).toBeInTheDocument()
-
   fireEvent.click(screen.getByText('⭐ Favorites'))
 
   await waitFor(() => expect(screen.getByText('Counterspell')).toBeInTheDocument())
   expect(screen.queryByText('Island')).not.toBeInTheDocument()
 
   fireEvent.click(screen.getByText('⭐ Favorites'))
-
-  await waitFor(() => expect(screen.getByText('Island')).toBeInTheDocument())
-  expect(screen.getByText('Counterspell')).toBeInTheDocument()
-})
-
-test('toggles owned filter back to all when clicked twice', async () => {
-  render(<MemoryRouter><CollectionPage /></MemoryRouter>)
-
-  expect(await screen.findByText('Counterspell')).toBeInTheDocument()
-  fireEvent.click(screen.getByText('Owned'))
-
-  await waitFor(() => expect(screen.getByText('Counterspell')).toBeInTheDocument())
-  expect(screen.queryByText('Island')).not.toBeInTheDocument()
-
-  fireEvent.click(screen.getByText('Owned'))
 
   await waitFor(() => expect(screen.getByText('Island')).toBeInTheDocument())
   expect(screen.getByText('Counterspell')).toBeInTheDocument()
@@ -122,7 +131,7 @@ test('toggles owned filter back to all when clicked twice', async () => {
 test('toggles missing filter back to all when clicked twice', async () => {
   render(<MemoryRouter><CollectionPage /></MemoryRouter>)
 
-  expect(await screen.findByText('Island')).toBeInTheDocument()
+  expect(await screen.findByText('Counterspell')).toBeInTheDocument()
   fireEvent.click(screen.getByText('Missing'))
 
   await waitFor(() => expect(screen.getByText('Island')).toBeInTheDocument())
@@ -143,6 +152,8 @@ test('filters cards by set', async () => {
 
   render(<MemoryRouter><CollectionPage /></MemoryRouter>)
 
+  expect(await screen.findByText('No cards match.')).toBeInTheDocument() // nothing owned yet
+  showAllCards()
   await screen.findByText('Island')
   expect(screen.getByText('Black Lotus')).toBeInTheDocument()
 
@@ -161,6 +172,8 @@ test('filters cards by rarity', async () => {
 
   render(<MemoryRouter><CollectionPage /></MemoryRouter>)
 
+  await screen.findByText('No cards match.')
+  showAllCards()
   await screen.findByText('Island')
 
   fireEvent.click(screen.getByText('Mythic'))
@@ -195,6 +208,37 @@ test('toggles recently found filter back to all when clicked twice', async () =>
   expect(screen.getByText('Counterspell')).toBeInTheDocument()
 })
 
+test('shows the first 25 cards, then all of them after "See all"', async () => {
+  const many: CardDto[] = Array.from({ length: 30 }, (_, i) => ({
+    ...cards[1],
+    id: `c${i}`,
+    oracleId: `o${i}`,
+    forgeName: `Card ${String(i).padStart(2, '0')}`,
+  }))
+  mockedEndpoints.browseCards.mockResolvedValue(many)
+  mockedEndpoints.getCollection.mockResolvedValue(
+    many.map((c) => ({ cardId: c.id, forgeName: c.forgeName, ownershipType: 'UNLOCK', quantity: 1, discoveredCount: 0, favorite: false })),
+  )
+
+  render(<MemoryRouter><CollectionPage /></MemoryRouter>)
+
+  expect(await screen.findByText('Card 00')).toBeInTheDocument()
+  expect(screen.getByText('Card 24')).toBeInTheDocument()
+  expect(screen.queryByText('Card 25')).not.toBeInTheDocument()
+
+  fireEvent.click(screen.getByText('See all (30)'))
+
+  await waitFor(() => expect(screen.getByText('Card 29')).toBeInTheDocument())
+  expect(screen.queryByText(/See all/)).not.toBeInTheDocument()
+})
+
+test('no "See all" button when everything already fits', async () => {
+  render(<MemoryRouter><CollectionPage /></MemoryRouter>)
+
+  expect(await screen.findByText('Counterspell')).toBeInTheDocument()
+  expect(screen.queryByText(/See all/)).not.toBeInTheDocument()
+})
+
 test('renders cached cards when the network is unavailable', async () => {
   idbMock.cacheGet.mockImplementation(async (key: string) => {
     if (key === CACHE_KEYS.cards) return cards
@@ -207,6 +251,8 @@ test('renders cached cards when the network is unavailable', async () => {
   render(<MemoryRouter><CollectionPage /></MemoryRouter>)
 
   expect(await screen.findByText('Counterspell')).toBeInTheDocument()
-  expect(screen.getByText('Island')).toBeInTheDocument()
+  showAllCards()
+  expect(await screen.findByText('Island')).toBeInTheDocument()
   expect(screen.queryByText('Failed to load collection.')).not.toBeInTheDocument()
 })
+

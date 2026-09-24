@@ -11,12 +11,14 @@ type OwnedFilter = 'all' | 'owned' | 'missing' | 'recent' | 'favorites'
 const COLORS = ['W', 'U', 'B', 'R', 'G', 'C']
 const MANA_CURVES = ['0', '1', '2', '3', '4+']
 const RARITY_ORDER = ['Common', 'Uncommon', 'Rare', 'Mythic']
+/** Cards rendered before "See all" (keeps the first paint and image downloads light). */
+const INITIAL_VISIBLE = 25
 
 export default function CollectionPage() {
   const [cards, setCards] = useState<CardDto[]>([])
   const [collection, setCollection] = useState<CollectionEntryDto[]>([])
   const [search, setSearch] = useState('')
-  const [ownedFilter, setOwnedFilter] = useState<OwnedFilter>('all')
+  const [ownedFilter, setOwnedFilter] = useState<OwnedFilter>('owned')
   const [colors, setColors] = useState<Set<string>>(new Set())
   const [curves, setCurves] = useState<Set<string>>(new Set())
   const [commanderEligibleOnly, setCommanderEligibleOnly] = useState(false)
@@ -24,6 +26,7 @@ export default function CollectionPage() {
   const [rarities, setRarities] = useState<Set<string>>(new Set())
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+  const [showAll, setShowAll] = useState(false)
 
   useEffect(() => {
     let mounted = true
@@ -162,6 +165,7 @@ export default function CollectionPage() {
   }, [cards, ownedMap, search, ownedFilter, colors, curves, commanderEligibleOnly, sets, rarities])
 
   const totalOwned = useMemo(() => collection.length, [collection])
+  const visible = showAll ? filtered : filtered.slice(0, INITIAL_VISIBLE)
 
   if (loading) return <div className="page">Loading…</div>
   if (error) return <div className="page empty">{error}</div>
@@ -265,7 +269,7 @@ export default function CollectionPage() {
 
       <div className="card-grid">
         {filtered.length === 0 && <div className="empty">No cards match.</div>}
-        {filtered.map((card) => {
+        {visible.map((card) => {
           const entry = ownedMap.get(card.id)
           const owned = entry !== undefined
           const quantity = entry ? entry.quantity : 0
@@ -308,7 +312,7 @@ export default function CollectionPage() {
               <div className="meta">
                 {card.types ?? ''} · {card.rarity ?? ''}
               </div>
-              <div className="meta">Ownership: {card.ownershipType}</div>
+              <div className="meta ownership-line">Ownership: {card.ownershipType}</div>
               <div className="owned" style={{ color: owned ? 'var(--good)' : 'var(--muted)' }}>
                 {label}
                 {discovered > 0 && <span style={{ color: 'var(--warn)' }}> · found ×{discovered}</span>}
@@ -317,6 +321,13 @@ export default function CollectionPage() {
           )
         })}
       </div>
+      {!showAll && filtered.length > INITIAL_VISIBLE && (
+        <div className="card-grid-more">
+          <button className="btn" onClick={() => setShowAll(true)}>
+            See all ({filtered.length})
+          </button>
+        </div>
+      )}
     </div>
   )
 }

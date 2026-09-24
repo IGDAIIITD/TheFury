@@ -73,6 +73,16 @@ a {
   margin-top: 16px;
 }
 
+.card-grid.compact {
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+}
+
+.card-grid-more {
+  display: flex;
+  justify-content: center;
+  margin-top: 16px;
+}
+
 .card-tile {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -1111,6 +1121,28 @@ a {
   .page {
     font-size: 80%;
     padding: 14px;
+  }
+  /* phones: always three cards per row (collection, deck builder, trades) */
+  .card-grid,
+  .card-grid.compact {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .card-grid .card-tile {
+    padding: 6px;
+    gap: 3px;
+    min-width: 0;
+  }
+  .card-grid .card-tile .name {
+    font-size: 11px;
+    overflow-wrap: anywhere;
+  }
+  .card-grid .card-tile .meta,
+  .card-grid .card-tile .owned {
+    font-size: 10px;
+  }
+  .card-grid .card-tile .ownership-line {
+    display: none;
   }
   .battle-hand .card-tile {
     width: 110px;
