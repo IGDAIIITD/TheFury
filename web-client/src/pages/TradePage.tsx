@@ -12,6 +12,7 @@ import {
   getOutgoingTrades,
   getPlayerUniqueCards,
   searchPlayers,
+  subscribeToTrades,
 } from '../api/tradeEndpoints'
 import type { PlayerSummaryDto, TradeCardDto, TradeDto, UniqueCardDto } from '../api/types'
 
@@ -113,11 +114,16 @@ export default function TradePage() {
       }
     }
     void load()
+    // Realtime pushes new/updated offers; the poll still catches lazy expiry.
+    const unsubscribe = subscribeToTrades(() => {
+      void loadTrades()
+    })
     const timer = setInterval(() => {
       void loadTrades()
     }, POLL_MS)
     return () => {
       mounted = false
+      unsubscribe()
       clearInterval(timer)
     }
   }, [loadTrades])

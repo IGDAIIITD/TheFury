@@ -154,3 +154,18 @@ export async function searchPlayers(query: string): Promise<PlayerSummaryDto[]> 
     specialization: r.specialization,
   }))
 }
+
+/**
+ * Live trade updates via Supabase Realtime. RLS limits the stream to trades the
+ * signed-in player is a party to; `onChange` should re-fetch (payloads carry
+ * only the trade row, not the TradeDto). Returns an unsubscribe function.
+ */
+export function subscribeToTrades(onChange: () => void): () => void {
+  const channel = supabase
+    .channel('my-trades')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'trades' }, () => onChange())
+    .subscribe()
+  return () => {
+    void supabase.removeChannel(channel)
+  }
+}

@@ -21,6 +21,7 @@ vi.mock('../api/tradeEndpoints', () => ({
   getOutgoingTrades: vi.fn(),
   getPlayerUniqueCards: vi.fn(),
   searchPlayers: vi.fn(),
+  subscribeToTrades: vi.fn(() => () => {}),
 }))
 
 const mockedUseAuth = useAuth as unknown as ReturnType<typeof vi.fn>
