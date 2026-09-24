@@ -167,14 +167,14 @@ switch ($Action) {
         Stop-Backend
 
         Say "`nRegistering scheduled task '$TaskName'..." 'Cyan'
-        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -WorkingDirectory $here `
+        $taskAction = New-ScheduledTaskAction -Execute 'powershell.exe' -WorkingDirectory $here `
             -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$($MyInvocation.MyCommand.Path)`" run"
-        $trigger = New-ScheduledTaskTrigger -AtStartup
-        $trigger.Delay = 'PT1M'   # let networking come up after boot
-        $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
+        $taskTrigger = New-ScheduledTaskTrigger -AtStartup
+        $taskTrigger.Delay = 'PT1M'   # let networking come up after boot
+        $taskPrincipal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+        $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
             -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
-        Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings `
+        Register-ScheduledTask -TaskName $TaskName -Action $taskAction -Trigger $taskTrigger -Principal $taskPrincipal -Settings $taskSettings `
             -Description 'Campus Forge battle engine + Cloudflare quick tunnel (battle-engine\battle-server.ps1)' -Force | Out-Null
         Ok 'task registered (runs as SYSTEM at boot, no login needed)'
 
