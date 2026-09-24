@@ -19,7 +19,7 @@
 - `signUp(db, email, meta)`: inserts into `auth.users`, firing the real signup trigger;
 - `as(db, role, uid, sql, params)`: runs SQL as that role with `auth.uid() = uid`, inside a transaction.
 
-`schema.test.mjs` holds the checks (80+), grouped by area. `setup-file.test.mjs` checks that
+`schema.test.mjs` holds the checks (90+), grouped by area (including the imported M19 set). `setup-file.test.mjs` checks that
 `SQL_EDITOR_SETUP.sql` equals the generated migrations + seed and bootstraps a working project on its own.
 
 **When you add a migration:** add checks to `schema.test.mjs`, run `npm test`, then `npm run build:setup-sql`

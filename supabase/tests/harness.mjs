@@ -2,12 +2,19 @@
 // run SQL as anon / authenticated / service_role. No Docker needed.
 import { PGlite } from '@electric-sql/pglite'
 import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto'
-import { readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const MIG = join(REPO, 'supabase/migrations')
+
+/** seed.sql (base catalog) then supabase/seed_sets/*.sql (imported sets), in order. */
+export function seedFiles() {
+  const setsDir = join(REPO, 'supabase/seed_sets')
+  const sets = existsSync(setsDir) ? readdirSync(setsDir).filter((f) => f.endsWith('.sql')).sort() : []
+  return [join(REPO, 'supabase/seed.sql'), ...sets.map((f) => join(setsDir, f))]
+}
 
 export async function boot({ upTo = null, seed = true, skip = [] } = {}) {
   const db = await PGlite.create({ extensions: { pgcrypto } })
@@ -22,7 +29,9 @@ export async function boot({ upTo = null, seed = true, skip = [] } = {}) {
       throw new Error(`migration ${f} failed: ${e.message}`)
     }
   }
-  if (seed) await db.exec(readFileSync(join(REPO, 'supabase/seed.sql'), 'utf8'))
+  if (seed) {
+    for (const file of seedFiles()) await db.exec(readFileSync(file, 'utf8'))
+  }
   return db
 }
 

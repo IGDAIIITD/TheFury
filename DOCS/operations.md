@@ -53,6 +53,30 @@ Smoke test: `curl -i -X POST https://prjsiywvhxqnsvsmfgxm.supabase.co/functions/
 → `401` with `Access-Control-Allow-Origin: *`. A `500` means `QR_SIGNING_SECRET` is missing or shorter than 32
 characters.
 
+## Add a card set
+
+Card data is catalog data, not schema, so it lives in seed files: `supabase/seed.sql` (base cards) and
+`supabase/seed_sets/<set>.sql` (imported sets, applied after it). To add a whole Magic set, e.g. Core Set 2020:
+
+```bash
+node scripts/import-scryfall-set.mjs m20                 # 1. writes supabase/seed_sets/m20.sql
+cd supabase/tests && npm test && npm run build:setup-sql  # 2. test + regenerate the bootstrap file
+```
+
+The script fetches the set's booster cards from Scryfall (basic lands excluded), **drops any card Forge doesn't
+implement** (it would be skipped when a deck is loaded for battle) and writes an idempotent insert. It skips
+cards whose name is already in the catalog, so existing ownership is never changed. It maps ownership by
+rarity (common → UNLIMITED, uncommon/rare → UNLOCK, mythic → UNIQUE) and makes legendary creatures
+commander-eligible. Adjust the tests' expected catalog total, then:
+
+3. **Apply** the new seed file to the hosted DB, the same way as a migration ([above](#apply-a-migration)).
+4. **Upload art:** `node scripts/import-scryfall-set.mjs m20 --upload-art` (needs `SUPABASE_URL` +
+   `SUPABASE_SERVICE_ROLE_KEY` in `.env`; skips images already in the bucket).
+5. **Print QR codes:** the new cards appear in the `qr-catalog` export automatically ([qr-codes.md](qr-codes.md)).
+
+Every UNLIMITED card also raises every player's collection %: the Collector achievements count owned cards
+out of the whole catalog.
+
 ## Battle engine service
 
 On the campus PC, from an **Administrator** PowerShell in the repo:

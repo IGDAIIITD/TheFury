@@ -17,7 +17,7 @@ rest is callable only by the service role (Edge Functions, battle engine). See [
 | Table | Purpose | Players can | Written by |
 | --- | --- | --- | --- |
 | `profiles` | 1:1 with `auth.users`: display name, email, cohort, role, XP, level, ban | read & update **own** presentation fields* | signup trigger, game functions, admins |
-| `cards` | card catalog (name, rarity, ownership type, set, colors, types, …) | read (anyone) | admins / seed |
+| `cards` | card catalog (name, rarity, ownership type, set, colors, types, …): `seed.sql` + `seed_sets/*.sql` | read (anyone) | admins / seed files |
 | `formats`, `card_legalities` | STANDARD / COMMANDER rules; per-card legality | read (anyone) | admins / seed |
 | `player_unlocks` | UNLOCK cards a player owns | read own | `apply_claim` |
 | `unique_cards` | serialized UNIQUE copies (`serial_number`, `history`, owner) | read own (+ cards in their pending trades) | `apply_claim`, `accept_trade`, admins |

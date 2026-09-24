@@ -47,24 +47,30 @@ async function generateCatalog(supabase: SupabaseClient, secret: string): Promis
     .select("id, forge_name, oracle_id, rarity, ownership_type");
   if (error) throw error;
 
+  // One ensure_print_claim round-trip per card; run them in parallel batches so
+  // a catalog of several hundred cards stays well inside the function time limit.
+  const BATCH = 25;
   const rows: CatalogRow[] = [];
-  for (const card of cards ?? []) {
-    const core = await deterministicCore(card.id);
-    const qrContent = await sign(core, secret);
-    const { error: ensureError } = await supabase.rpc("ensure_print_claim", {
-      p_card_id: card.id,
-      p_core: core,
-      p_token: qrContent,
-    });
-    if (ensureError) throw ensureError;
-    rows.push({
-      cardName: card.forge_name,
-      qrContent,
-      tokenCore: core,
-      ownershipType: card.ownership_type,
-      rarity: card.rarity ?? "",
-      oracleId: card.oracle_id,
-    });
+  const list = cards ?? [];
+  for (let i = 0; i < list.length; i += BATCH) {
+    rows.push(...await Promise.all(list.slice(i, i + BATCH).map(async (card) => {
+      const core = await deterministicCore(card.id);
+      const qrContent = await sign(core, secret);
+      const { error: ensureError } = await supabase.rpc("ensure_print_claim", {
+        p_card_id: card.id,
+        p_core: core,
+        p_token: qrContent,
+      });
+      if (ensureError) throw ensureError;
+      return {
+        cardName: card.forge_name,
+        qrContent,
+        tokenCore: core,
+        ownershipType: card.ownership_type,
+        rarity: card.rarity ?? "",
+        oracleId: card.oracle_id,
+      };
+    })));
   }
   rows.sort((a, b) => a.cardName.toLowerCase().localeCompare(b.cardName.toLowerCase()));
   return rows;

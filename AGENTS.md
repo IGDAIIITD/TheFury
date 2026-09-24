@@ -10,14 +10,15 @@ Campus Forge: a campus-wide collectible MTG game. **Supabase is the backend** (P
 
 ## Layout
 - `web-client/` — Vite + React 18 + TS PWA; `src/api/*` is the only layer that talks to Supabase. Deployed to GitHub Pages under `/TheFury/`.
-- `supabase/` — `migrations/*.sql` (schema source of truth), `functions/` (Edge Functions), `seed.sql`, `SQL_EDITOR_SETUP.sql` (**generated**: the one-paste bootstrap for a fresh project), `tests/` (PGlite schema suite + the generator).
+- `supabase/` — `migrations/*.sql` (schema source of truth), `functions/` (Edge Functions), `seed.sql` (base catalog, 104 cards), `seed_sets/*.sql` (imported sets, **generated** by `scripts/import-scryfall-set.mjs`, applied after `seed.sql`; currently M19 = 253 cards), `SQL_EDITOR_SETUP.sql` (**generated**: the one-paste bootstrap for a fresh project), `tests/` (PGlite schema suite + the generator).
 - `battle-engine/` — Spring Boot 3.3 service (port **17175**) embedding `forge-headless`. In-memory match state; validates Supabase JWTs via JWKS; writes via service-role RPCs. Setup/deploy guide: `battle-engine/README.md`. Scripts:
   - `setup-forge.ps1` — recreates the gitignored `forge-engine/` checkout (upstream Forge `fd8196a8`, blobless + sparse, `core.eol=lf`), applies `forge/campusforge-forge.patch`, copies `forge/forge-headless`, runs `mvn install`. Never edit `forge-engine/` directly; change `battle-engine/forge/` and re-run the script.
   - `run-engine.ps1` — runs the jar with `SUPABASE_*` read from the root `.env`; CORS allows the Pages origin + localhost.
   - `start-public.ps1` — engine + `cloudflared` quick tunnel. It publishes the random `*.trycloudflare.com` URL to `app_config.battle_engine_url`, watches both processes, and clears the URL on exit.
   - `battle-server.ps1 install|start|stop|restart|update|status|logs|uninstall` — admin service wrapper: a SYSTEM task at boot running a supervisor loop around `start-public.ps1`. **`update` = stop → `mvn clean package` (tests) → start; use it to deploy engine changes** (the running JVM locks the jar). From a non-admin shell, `status` can't see the SYSTEM task or processes and says so. Logs go to `battle-engine/logs/` (gitignored).
 - `admin-console/` — Vite admin app on Supabase, **not deployed** (`npm run dev`, port 17173).
-- `scripts/download-card-art.ps1` — Scryfall art download + upload to the `card-art` bucket.
+- `scripts/import-scryfall-set.mjs <set> [--upload-art]` — imports a whole set: Scryfall data, only cards Forge implements, rarity→ownership (common UNLIMITED, uncommon/rare UNLOCK, mythic UNIQUE), writes `supabase/seed_sets/<set>.sql`, optionally uploads art. Card data belongs in seed files, **not migrations** (migrations run before `seed.sql` on a fresh install, which would create duplicate names). Procedure: `DOCS/operations.md#add-a-card-set`.
+- `scripts/download-card-art.ps1` — Scryfall art download + upload for the base catalog.
 - **Docs: `DOCS/`** is the single documentation home: architecture, game rules, database, Edge Functions, QR codes, frontend, battle engine, operations runbook, security and testing. `DOCS/design/original-plan.md` is the historical v2 plan (pre-Supabase). The root `README.md` and `battle-engine/README.md` are short entry points into `DOCS/`. **When behaviour changes, update the matching `DOCS/` page in the same commit.**
 
 ## Commands
@@ -64,7 +65,7 @@ Campus Forge: a campus-wide collectible MTG game. **Supabase is the backend** (P
 - Level: Postgres `compute_level(xp)` (`level = 1 + xp/100`) is the only formula.
 - Cohorts: `is_cohort_valid()` / `department_of()` (B.Tech CSE/CSAI/CSAM/CSB/CSSS/CSD/CSECON/ECE/EVE; M.Tech CSE/ECE).
 - QR tokens: signed `V1.<CORE>.<SIG>` (HMAC-SHA256 hex, constant-time); forged or tampered tokens → **400 before any DB lookup**. Print-catalog cores are deterministic from the card id (`deterministicCore` in TS == `card_print_core` in SQL) and therefore **must** be signed. Unsigned 12-char codes are accepted only for admin-spawned claims (`claims.spawned_by` set). The QR image encodes the full token; `qr-catalog` JSON is `[{cardName, qrContent}]`.
-- Ownership: an UNLOCK unlock = 1 copy; UNLIMITED (basic lands + the 10 starter creatures) = everyone owns infinite copies; UNIQUE = one serialized `unique_cards` row each. Format rules (STANDARD max 4 per non-basic) still apply in decks.
+- Ownership: an UNLOCK unlock = 1 copy; UNLIMITED (basic lands, the 10 starter creatures, imported-set commons) = everyone owns infinite copies; UNIQUE = one serialized `unique_cards` row each. Format rules (STANDARD max 4 per non-basic) still apply in decks.
 - Starter creatures (UNLIMITED): Raging Goblin, Goblin Piker, Vulshok Berserker, Hill Giant, Fire Elemental, Grizzly Bears, Elvish Warrior, Trained Armodon, War Mammoth, Craw Wurm. `grant_starter_pack` gives each new player a 60-card "Red-Green Starter" deck (4x each + 10 Mountain + 10 Forest), once (STARTER row in `game_log`).
 - Trades: `accept_trade` locks the trade row + all `unique_cards` in **sorted-UUID order**, re-verifies ownership, swaps owners, appends to `unique_cards.history`; 24h TTL → 410 on expired.
 - Admin = `profiles.role = 'ADMIN'` (RLS policies + EF gates). Banned players cannot claim or trade.

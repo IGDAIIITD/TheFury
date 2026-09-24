@@ -170,6 +170,42 @@ console.log('\n# app_config (public runtime settings)')
   check('admins can clear it', r.ok && r.rows[0].value === null, JSON.stringify(r))
 }
 
+console.log('\n# imported set: M19 (seed_sets/m19.sql)')
+{
+  const n = async () => (await q(`select count(*)::int as n from public.cards`))[0].n
+  const total = await n()
+  check('catalog = 104 base cards + 253 new M19 cards', total === 357, String(total))
+  const dups = await q(`select lower(forge_name) as name, count(*)::int as n from public.cards group by 1 having count(*) > 1`)
+  check('no duplicate card names', dups.length === 0, JSON.stringify(dups))
+  const own = async (name) => (await q(`select ownership_type, commander_eligible from public.cards where forge_name = $1`, [name]))[0]
+  check('M19 common → UNLIMITED', (await own('Skeleton Archer'))?.ownership_type === 'UNLIMITED')
+  check('M19 rare → UNLOCK', (await own('Cleansing Nova'))?.ownership_type === 'UNLOCK')
+  const bolas = await own('Nicol Bolas, the Ravager')
+  check('M19 mythic → UNIQUE, legendary creature is commander-eligible', bolas?.ownership_type === 'UNIQUE' && bolas.commander_eligible === true, JSON.stringify(bolas))
+  check('existing catalog cards keep their ownership (Cancel stays UNLOCK)', (await own('Cancel'))?.ownership_type === 'UNLOCK')
+  const noArt = await q(`select count(*)::int as n from public.cards where set_code = 'M19' and forge_name like '% // %'`)
+  check('double-faced cards use their front-face name (what Forge loads)', noArt[0].n === 0)
+  await db.exec(readFileSync(join(REPO, 'supabase/seed_sets/m19.sql'), 'utf8'))
+  check('set import is idempotent', (await n()) === total)
+
+  // a mythic is one-of: first scan wins the serialized copy, the next player is refused
+  const bolasId = (await q(`select id from public.cards where forge_name = 'Nicol Bolas, the Ravager'`))[0].id
+  const core = (await q(`select public.card_print_core($1) as c`, [bolasId]))[0].c
+  await q(`select public.ensure_print_claim($1, $2, $3)`, [bolasId, core, `V1.${core}.SIG`])
+  let r = await as(db, 'service_role', null, `select public.apply_claim($1, $2) as res`, [core, alice])
+  check('first scan of a UNIQUE M19 card claims serial #1', r.ok && r.rows[0].res.unlocked === true, r.error)
+  r = await as(db, 'service_role', null, `select public.apply_claim($1, $2)`, [core, bob])
+  check('a second player cannot claim the same unique', !r.ok && r.code === 'CF409', r.error)
+  const serial = await q(`select owner_id, serial_number from public.unique_cards where card_id = $1`, [bolasId])
+  check('exactly one owner, serial 1', serial.length === 1 && serial[0].owner_id === alice && serial[0].serial_number === 1, JSON.stringify(serial))
+
+  // UNLIMITED commons are deck-ready for everyone: 4 copies without scanning anything
+  r = await as(db, 'authenticated', bob, `select public.validate_deck_spec('STANDARD', null, jsonb_build_array(
+      jsonb_build_object('cardId', (select id from public.cards where forge_name = 'Skeleton Archer'), 'quantity', 4),
+      jsonb_build_object('cardId', (select id from public.cards where forge_name = 'Swamp'), 'quantity', 56))) as v`)
+  check('4x an M19 common is legal without owning a scan', r.ok && r.rows[0].v.valid === true, JSON.stringify(r.rows?.[0]?.v ?? r.error))
+}
+
 console.log('\n# battle-engine RPCs (service role)')
 {
   const bobDeck = (await q(`select id from public.decks where player_id = $1 limit 1`, [bob]))[0]?.id

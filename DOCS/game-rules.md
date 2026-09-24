@@ -5,13 +5,18 @@ displays them. Change a rule in SQL, not in the UI.
 
 ## Cards and ownership
 
-The catalog (`cards`, seeded by `supabase/seed.sql`) has 104 cards. Every card has an **ownership type**:
+The catalog (`cards`) has **357 cards**: the 104-card base set in `supabase/seed.sql`, plus all of **Core Set 2019
+(M19)** in `supabase/seed_sets/m19.sql` (253 new cards; basic lands and 7 cards already in the base set are
+skipped). Every card has an **ownership type**:
 
 | Type | Count | How you get it | Copies you own |
 | --- | --- | --- | --- |
-| `UNLIMITED` | 15 | Everyone owns it from the start: 5 basic lands + the 10 starter creatures | unlimited |
-| `UNLOCK` | 86 | Scan its QR code once | **1** |
-| `UNIQUE` | 3 | Be the first to scan its (single-use) QR code; the card is serialized (#1, #2, …) and can be traded | one per serialized copy you hold |
+| `UNLIMITED` | 119 | Everyone owns it from the start: basic lands, the 10 starter creatures, M19 commons | unlimited |
+| `UNLOCK` | 219 | Scan its QR code once (base cards, M19 uncommons and rares) | **1** |
+| `UNIQUE` | 19 | Be the first to scan its (single-use) QR code; the card is serialized (#1, #2, …) and can be traded (3 base cards + the 16 M19 mythics) | one per serialized copy you hold |
+
+Imported sets map rarity to ownership: **common → UNLIMITED, uncommon/rare → UNLOCK, mythic → UNIQUE**.
+Legendary creatures are commander-eligible. Adding another set: [operations.md](operations.md#add-a-card-set).
 
 **Starter creatures** (UNLIMITED): Raging Goblin, Goblin Piker, Vulshok Berserker, Hill Giant, Fire Elemental
 (red) and Grizzly Bears, Elvish Warrior, Trained Armodon, War Mammoth, Craw Wurm (green).
@@ -60,7 +65,7 @@ Checked whenever a player opens their profile (`sweep_achievements`):
 | MASTER_TRADER | Master Trader | complete 5 trades |
 
 "Discoveries" counts every scan (including repeats). "Own" counts UNLIMITED cards, so every player starts at
-15/104 of the catalog.
+119/357 (33%) of the catalog, which already satisfies Collector I (25%).
 
 ## Decks
 
