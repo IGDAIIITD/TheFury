@@ -10,6 +10,7 @@
 #   start      start the task and wait until battles are live
 #   stop       stop the task, kill engine + tunnel, clear the published URL
 #   restart    stop + start
+#   update     stop, rebuild the engine jar (mvn clean package, runs tests), start
 #   status     task state, processes, published URL and whether it answers
 #   logs       show the last lines of the supervisor / engine / tunnel logs
 #   uninstall  stop and remove the scheduled task
@@ -19,7 +20,7 @@
 # Logs: battle-engine\logs\ (supervisor.log, start-public.log, engine.log, cloudflared.log)
 
 param(
-    [ValidateSet('install', 'start', 'stop', 'restart', 'status', 'logs', 'uninstall', 'run')]
+    [ValidateSet('install', 'start', 'stop', 'restart', 'update', 'status', 'logs', 'uninstall', 'run')]
     [string]$Action = 'install'
 )
 
@@ -42,7 +43,7 @@ function Test-Admin {
 }
 
 # --- self-elevate for actions that need it ------------------------------------
-if ($Action -in 'install', 'start', 'stop', 'restart', 'uninstall' -and -not (Test-Admin)) {
+if ($Action -in 'install', 'start', 'stop', 'restart', 'update', 'uninstall' -and -not (Test-Admin)) {
     Say 'Administrator rights needed; relaunching elevated (approve the UAC prompt)...' 'Yellow'
     Start-Process powershell -Verb RunAs -ArgumentList @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-NoExit', '-File', "`"$($MyInvocation.MyCommand.Path)`"", $Action)
@@ -196,6 +197,20 @@ switch ($Action) {
 
     'stop' { Stop-Backend }
 
+    'update' {
+        # The running JVM locks target\*.jar, so stop first, then rebuild.
+        $mvn = Find-Exe 'mvn.cmd' @("$env:LOCALAPPDATA\Temp\opencode\apache-maven-3.9.9\bin\mvn.cmd")
+        if (-not $mvn) { Bad 'Maven not found (put mvn on PATH)'; exit 1 }
+        Stop-Backend
+        Say "`nBuilding with $mvn ..." 'Cyan'
+        Push-Location $here
+        try { & $mvn -q clean package; $built = ($LASTEXITCODE -eq 0) } finally { Pop-Location }
+        if (-not $built) { Bad 'build failed; engine left stopped (fix it, then run: battle-server.ps1 update)'; exit 1 }
+        Ok 'engine jar rebuilt (tests passed)'
+        Start-ScheduledTask -TaskName $TaskName
+        [void](Wait-Live)
+    }
+
     'restart' {
         Stop-Backend
         Start-Sleep -Seconds 3
@@ -204,13 +219,18 @@ switch ($Action) {
     }
 
     'status' {
+        # Non-admin shells can't see the SYSTEM task or SYSTEM processes' command
+        # lines, so only claim "not installed"/"none" when elevated.
+        $admin = Test-Admin
         $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
         if ($task) {
             $info = Get-ScheduledTaskInfo -TaskName $TaskName
             Say "Task:      $($task.State)  (last run $($info.LastRunTime), result $($info.LastTaskResult))"
-        } else { Say 'Task:      not installed' 'Yellow' }
+        } elseif ($admin) { Say 'Task:      not installed' 'Yellow' }
+        else { Say 'Task:      unknown (run as administrator to see the SYSTEM task)' 'Yellow' }
         $procs = @(Get-BackendProcesses)
-        Say ("Processes: " + $(if ($procs) { ($procs | ForEach-Object { "$($_.Name)#$($_.ProcessId)" }) -join ', ' } else { 'none' }))
+        Say ("Processes: " + $(if ($procs) { ($procs | ForEach-Object { "$($_.Name)#$($_.ProcessId)" }) -join ', ' }
+            elseif ($admin) { 'none' } else { 'none visible (SYSTEM processes need an admin shell)' }))
         Say ("Local:     " + $(if (Test-Engine 'http://localhost:17175') { 'engine answering on http://localhost:17175' } else { 'engine not answering on :17175' }))
         $url = Get-PublishedUrl
         if (-not $url) { Say 'Published: (none) - Battle tab hidden on the site' 'Yellow' }
