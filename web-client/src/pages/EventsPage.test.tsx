@@ -16,24 +16,14 @@ vi.mock('../api/endpoints', () => ({
   getFeedHistory: vi.fn(),
 }))
 
-let feedHandler: ((msg: { body: string }) => void) | null = null
+let feedHandler: ((entry: FeedEntryDto) => void) | null = null
 
-vi.mock('@stomp/stompjs', () => ({
-  Client: class FakeClient {
-    constructor(public config: Record<string, unknown>) {}
-    subscribe = vi.fn((_topic: string, handler: (msg: { body: string }) => void) => {
-      feedHandler = handler
-      return { unsubscribe: vi.fn() }
-    })
-    activate() {
-      const onConnect = this.config.onConnect as () => void
-      onConnect?.()
-    }
-    deactivate() {}
-  },
+vi.mock('../api/feedRealtime', () => ({
+  subscribeToFeed: vi.fn((onEntry: (entry: FeedEntryDto) => void) => {
+    feedHandler = onEntry
+    return vi.fn()
+  }),
 }))
-
-vi.mock('sockjs-client', () => ({ default: class FakeSockJS {} }))
 
 const mockedUseAuth = useAuth as unknown as ReturnType<typeof vi.fn>
 const mockedEndpoints = endpoints as {
@@ -89,17 +79,15 @@ test('renders feed history from the backend', async () => {
   expect(screen.getByText(/event started: Race Week/)).toBeInTheDocument()
 })
 
-test('live feed entries are prepended over STOMP', async () => {
+test('live feed entries are prepended over Realtime', async () => {
   render(<EventsPage />)
   await screen.findByText(/Alice .* discovered Test Card/)
 
   feedHandler?.({
-    body: JSON.stringify({
-      type: 'ACHIEVEMENT',
-      message: 'earned the First Discovery achievement',
-      playerName: 'Bob',
-      createdAt: '2026-08-03T13:00:00',
-    } as FeedEntryDto),
+    type: 'ACHIEVEMENT',
+    message: 'earned the First Discovery achievement',
+    playerName: 'Bob',
+    createdAt: '2026-08-03T13:00:00',
   })
 
   await waitFor(() => expect(screen.getByText(/Bob .* earned the First Discovery achievement/)).toBeInTheDocument())

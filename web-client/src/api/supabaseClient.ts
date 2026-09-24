@@ -20,3 +20,44 @@ export async function getSupabaseSessionToken(): Promise<string | null> {
     return null
   }
 }
+
+/** Error thrown by {@link callEdgeFunction}; carries the HTTP status. */
+export class EdgeFunctionError extends Error {
+  status: number
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = 'EdgeFunctionError'
+    this.status = status
+  }
+}
+
+/**
+ * Invoke a Supabase Edge Function with the caller's session, using raw fetch
+ * (instead of `functions.invoke`) so non-2xx statuses stay predictable.
+ */
+export async function callEdgeFunction<T>(name: string, body: unknown): Promise<T> {
+  const token = await getSupabaseSessionToken()
+  const res = await fetch(`${supabaseUrl}/functions/v1/${name}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: supabaseAnonKey,
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body),
+  })
+
+  const text = await res.text()
+  let parsed: unknown = null
+  try {
+    parsed = text ? JSON.parse(text) : null
+  } catch {
+    parsed = null
+  }
+
+  if (!res.ok) {
+    const message = (parsed as { message?: string } | null)?.message ?? `Request failed (${res.status})`
+    throw new EdgeFunctionError(res.status, message)
+  }
+  return parsed as T
+}

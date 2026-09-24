@@ -1,4 +1,4 @@
-import api from './client'
+import { EdgeFunctionError, callEdgeFunction } from './supabaseClient'
 import type { ClaimResult } from './types'
 
 export class ClaimApiError extends Error {
@@ -13,11 +13,13 @@ export class ClaimApiError extends Error {
 export async function claimToken(token: string): Promise<ClaimResult> {
   const trimmed = token.trim().toUpperCase()
   try {
-    const { data } = await api.post<ClaimResult>('/claim', { token: trimmed })
-    return data
+    return await callEdgeFunction<ClaimResult>('claim', { token: trimmed })
   } catch (err) {
-    const status = (err as { response?: { status?: number } })?.response?.status ?? 0
-    const message = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+    if (err instanceof EdgeFunctionError) {
+      throw new ClaimApiError(err.status, err.message)
+    }
+    const status = (err as { status?: number })?.status ?? 0
+    const message = (err as { message?: string })?.message
     throw new ClaimApiError(status, message ?? `Claim failed (${status})`)
   }
 }

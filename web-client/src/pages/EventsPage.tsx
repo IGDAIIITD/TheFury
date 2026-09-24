@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Client } from '@stomp/stompjs'
-import SockJS from 'sockjs-client'
 import { getActiveEvents, getFeedHistory, listEvents } from '../api/endpoints'
+import { subscribeToFeed } from '../api/feedRealtime'
 import type { EventDto, FeedEntryDto, FeedType } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
 import { CACHE_KEYS, cacheGet, cacheSet } from '../lib/idb'
@@ -106,30 +105,19 @@ export default function EventsPage() {
 
   useEffect(() => {
     if (!token) return
-    const socketUrl = `${window.location.protocol}//${window.location.host}/ws/match`
-    const client = new Client({
-      webSocketFactory: () => new SockJS(socketUrl),
-      connectHeaders: { Authorization: `Bearer ${token}` },
-      reconnectDelay: 5000,
-      onConnect: () => {
-        client.subscribe('/topic/feed', (msg) => {
-          const entry = JSON.parse(msg.body) as FeedEntryDto
-          setFeed((current) => {
-            if (seenRef.current.has(feedKey(entry))) return current
-            seenRef.current.add(feedKey(entry))
-            const next = [entry, ...current].slice(0, 50)
-            cacheSet(CACHE_KEYS.feed, next)
-            return next
-          })
+    const unsubscribe = subscribeToFeed(
+      (entry) => {
+        setFeed((current) => {
+          if (seenRef.current.has(feedKey(entry))) return current
+          seenRef.current.add(feedKey(entry))
+          const next = [entry, ...current].slice(0, 50)
+          cacheSet(CACHE_KEYS.feed, next)
+          return next
         })
-        setLive(true)
       },
-      onWebSocketClose: () => setLive(false),
-    })
-    client.activate()
-    return () => {
-      client.deactivate()
-    }
+      setLive,
+    )
+    return unsubscribe
   }, [token])
 
   const [upcoming, ended] = useMemo(() => {

@@ -4,7 +4,6 @@ import { useAuth } from '../auth/AuthContext'
 import {
   BTECH_SPECIALIZATIONS,
   MTECH_SPECIALIZATIONS,
-  type ApiError,
   type DegreeLevel,
 } from '../api/types'
 
@@ -44,8 +43,8 @@ export default function LoginPage() {
       }
       navigate('/collection')
     } catch (err) {
-      const apiErr = err as { response?: { data?: ApiError } }
-      setError(apiErr.response?.data?.message ?? 'Something went wrong.')
+      const message = (err as { message?: string })?.message
+      setError(message ?? 'Something went wrong.')
     } finally {
       setBusy(false)
     }
