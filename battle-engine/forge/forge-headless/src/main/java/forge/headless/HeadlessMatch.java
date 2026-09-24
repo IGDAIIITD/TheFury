@@ -31,6 +31,9 @@ import java.util.function.Consumer;
  */
 public class HeadlessMatch {
 
+    /** Life total both players start with (standard Magic). The web battle board's health bar assumes 20. */
+    public static final int STARTING_LIFE = 20;
+
     public static final long EMIT_INTERVAL_MS = 50;
 
     private final Game game;
@@ -54,10 +57,10 @@ public class HeadlessMatch {
         List<RegisteredPlayer> players = new ArrayList<>();
         RegisteredPlayer rpA = new RegisteredPlayer(deckA);
         rpA.setPlayer(playerA);
-        rpA.setStartingLife(10);
+        rpA.setStartingLife(STARTING_LIFE);
         RegisteredPlayer rpB = new RegisteredPlayer(deckB);
         rpB.setPlayer(playerB);
-        rpB.setStartingLife(10);
+        rpB.setStartingLife(STARTING_LIFE);
         players.add(rpA);
         players.add(rpB);
 

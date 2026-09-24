@@ -17,7 +17,7 @@ by embedding the [Forge](https://github.com/Card-Forge/forge) engine headlessly.
 The engine depends on `forge:forge-headless:2.0.14-SNAPSHOT` from the local Maven repo. It is built from upstream
 Forge pinned to commit `fd8196a8`, plus:
 
-- `battle-engine/forge/forge-headless/`: the headless driver (`HeadlessMatch`, remote/human player
+- `battle-engine/forge/forge-headless/`: the headless driver (`HeadlessMatch`, which sets the 20-life start, remote/human player
   controllers, game-state serializer, bootstrap);
 - `battle-engine/forge/campusforge-forge.patch`: trims the Maven reactor to core/game/ai/headless, adds
   `GameRules.startingPlayerChooserIndex` (the lobby host picks play/draw), a `ForgeDebug` trace switch

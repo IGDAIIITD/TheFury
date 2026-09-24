@@ -78,6 +78,7 @@ The deck builder checks decks with `validate_deck_spec` when saving. The battle 
 
 ## Battles
 
+- Both players start at **20 life** (`HeadlessMatch.STARTING_LIFE`).
 - 1v1 with real Magic rules (Forge). One player creates a **lobby** and gets a 6-character code; the other
   **joins** with the code and a deck. The game starts immediately.
 - **Winning** awards 50 XP × the event bonus (if the match belongs to an active event), records the result and

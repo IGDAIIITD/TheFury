@@ -64,7 +64,10 @@ try {
 
     Write-Host 'Syncing forge-headless module...'
     $dest = Join-Path $ForgeDir 'forge-headless'
-    if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
+    # rd with the \\?\ prefix: build output under target\ can exceed MAX_PATH,
+    # which PS 5.1's Remove-Item cannot delete.
+    if (Test-Path $dest) { & cmd.exe /c "rd /s /q `"\\?\$dest`"" }
+    if (Test-Path $dest) { throw "could not remove $dest" }
     Copy-Item -Recurse $headless $dest
 
     if (-not $SkipBuild) {
