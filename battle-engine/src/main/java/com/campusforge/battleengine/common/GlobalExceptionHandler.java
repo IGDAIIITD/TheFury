@@ -2,8 +2,12 @@ package com.campusforge.battleengine.common;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.TypeMismatchException;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.ErrorResponse;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -30,8 +34,21 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(body("NOT_FOUND", e.getMessage()));
     }
 
+    // Malformed JSON body / unparsable path or query value (e.g. a bad UUID).
+    @ExceptionHandler({HttpMessageNotReadableException.class, TypeMismatchException.class})
+    public ResponseEntity<Map<String, Object>> onBadInput(Exception e) {
+        return ResponseEntity.badRequest().body(body("BAD_REQUEST", "Malformed request"));
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> onException(Exception e) {
+        // Spring MVC's own errors (unknown path 404, wrong method 405, missing
+        // parameter 400, ...) carry their status; don't turn them into 500s.
+        if (e instanceof ErrorResponse err) {
+            HttpStatusCode status = err.getStatusCode();
+            return ResponseEntity.status(status).body(body(status.is4xxClientError() ? "BAD_REQUEST" : "INTERNAL",
+                    status.value() == 404 ? "Not found" : err.getBody().getDetail()));
+        }
         log.warn("Unhandled battle-engine error", e);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(body("INTERNAL", "Internal error"));
     }

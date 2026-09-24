@@ -11,7 +11,8 @@ import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerCo
 /**
  * STOMP broker for live battle state. Player actions arrive at
  * {@code /app/match/{matchId}/action}; per-seat state is pushed to
- * {@code /topic/match/{matchId}/p{index}}. WS auth = Supabase access-token JWT.
+ * {@code /topic/match/{matchId}/p{index}}. Transport: native WebSocket at
+ * {@code /ws/match}. WS auth = Supabase access-token JWT.
  */
 @Configuration
 @EnableWebSocketMessageBroker
@@ -36,7 +37,10 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
-        registry.addEndpoint("/ws/match").setAllowedOriginPatterns("*").withSockJS();
+        // Native WebSocket only (the PWA uses @stomp/stompjs brokerURL). SockJS was
+        // dropped: its client registers a legacy 'unload' listener and rejects
+        // ws:// / wss:// URLs. Any origin may connect; STOMP CONNECT requires a
+        // valid Supabase access token (SupabaseStompAuthChannelInterceptor).
         registry.addEndpoint("/ws/match").setAllowedOriginPatterns("*");
     }
 }
