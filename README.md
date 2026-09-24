@@ -80,6 +80,7 @@ Apply these once per environment (the hosted DB was bootstrapped from
 7. **Frontend.** Push to `main`; `.github/workflows/deploy-web.yml` lints, tests, builds
    and deploys to Pages.
 8. **Battles (optional).** Build the engine once, then run
-   `battle-engine/start-public.ps1` on the host PC. It opens a Cloudflare quick tunnel and
+   `battle-engineattle-server.ps1 install` (as administrator) on the host PC; it runs the
+   engine as a boot-time background service via `start-public.ps1`. It opens a Cloudflare quick tunnel and
    publishes the URL to Supabase `app_config`; the site picks it up without a rebuild.
    See [battle-engine/README.md](battle-engine/README.md).

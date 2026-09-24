@@ -141,7 +141,7 @@ powershell -ExecutionPolicy Bypass -File battle-engine/setup-forge.ps1 -Mvn "C:\
 cd battle-engine; mvn clean package; cd ..
 ```
 
-### Step 3: go live
+### Step 3: go live (foreground, for a quick run)
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File battle-engine/start-public.ps1
@@ -163,19 +163,35 @@ the engine answers through the public URL, publishes the URL, and keeps watching
 clears the URL, which hides the Battle tab, and stops both processes. Open tabs pick
 up a new URL within seconds; others get it on their next page load.
 
-### Step 4 (optional): start automatically at boot
+### Step 4: run it as a background service (recommended)
 
-Run once in an **Administrator** PowerShell:
+Right-click PowerShell → **Run as administrator**, then:
 
 ```powershell
-schtasks /Create /TN "CampusForge Battles" /SC ONSTART /DELAY 0001:00 /RU SYSTEM /RL HIGHEST /TR "powershell -NoProfile -ExecutionPolicy Bypass -File \"C:\Users\student\Desktop\thingamamagicthegathering\2026-08-02 mtgoffline\battle-engine\start-public.ps1\""
-schtasks /Run /TN "CampusForge Battles"
-powercfg /change standby-timeout-ac 0
+cd "C:\Users\student\Desktop\thingamamagicthegathering\2026-08-02 mtgoffline"
+powershell -ExecutionPolicy Bypass -File battle-engine\battle-server.ps1 install
 ```
 
-Stop with `schtasks /End /TN "CampusForge Battles"`. The script exits when the engine
-or tunnel dies. For automatic restarts, open Task Scheduler → the task → Settings →
-"If the task fails, restart every 1 minute".
+`install` checks the prerequisites (java, cloudflared, engine jar, Forge card data,
+`.env`), stops anything already running, and registers the **CampusForge Battles**
+scheduled task. The task runs as SYSTEM at boot with no login needed. It also disables
+sleep on AC power, starts everything, and waits until it prints
+`Battles are LIVE at https://….trycloudflare.com`.
+
+The task runs a supervisor. If the engine or tunnel dies, it clears the URL and
+brings both back up with a fresh URL about 2 minutes later.
+
+| Command (`battle-engine\battle-server.ps1 <action>`) | What it does |
+| --- | --- |
+| `status` | task state, processes, published URL and whether it answers |
+| `logs` | last lines of `supervisor.log`, `start-public.log`, `engine.log`, `cloudflared.log` |
+| `restart` | stop + start (e.g. after rebuilding the jar) |
+| `stop` | stop everything and hide the Battle tab (starts again at next boot) |
+| `start` | start again without rebooting |
+| `uninstall` | stop and remove the task |
+
+`status` and `logs` work without admin rights. The other actions re-launch themselves
+elevated if needed.
 
 ### Step 5: end-to-end check
 
@@ -208,7 +224,7 @@ Player B: join with the code. When the game ends, the winner gets 50 XP, a
 | `Filename too long` while cloning | Windows path limit; the script already sets `core.longpaths` and a sparse checkout; keep the repo path short. |
 | Every call returns 401 | Token not from this project, expired, or the engine could not reach `SUPABASE_URL` for JWKS at startup (check the `Loaded N JWKS keys` line). |
 | Browser: CORS error | Add the exact page origin to `CAMPUSFORGE_CORS_ALLOWED_ORIGINS` and restart. |
-| Battle tab never appears on Pages | `start-public.ps1` not running / failed (check `battle-engine/logs/`), or `app_config.battle_engine_url` is empty. The site only shows the tab if the URL answers `/api/v1/battle/features`. |
+| Battle tab never appears on Pages | Run `battle-server.ps1 status` / `logs`; `start-public.ps1` not running / failed, or `app_config.battle_engine_url` is empty. The site only shows the tab if the URL answers `/api/v1/battle/features`. |
 | cloudflared: "failed to request quick Tunnel" | Cloudflare rate-limits quick tunnels; wait a minute and re-run. |
 | "Deck not valid" when starting a match | `validate_deck` rejected it (not owned, too many copies, < 60 cards...). The message names the first problem. |
 | Battle tab missing | `VITE_BATTLE_ENGINE_URL` was empty at build time. It is baked into the bundle; rebuild after changing it. |
