@@ -37,6 +37,10 @@ web-client/.env.local
 web-client/.env.production
 # Forge fork checkout (recreate with battle-engine/setup-forge.ps1)
 /forge-engine/
+/forge-engine.old-*/
 
 # battle-engine runtime logs (start-public.ps1)
 battle-engine/logs/
+
+# repo-local Maven repository (setup-forge.ps1 / battle-server.ps1 / .mvn/maven.config)
+battle-engine/.m2/

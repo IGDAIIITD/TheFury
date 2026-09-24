@@ -5,7 +5,9 @@
 #   2. applies forge/campusforge-forge.patch (module list trimmed to core/game/ai/headless,
 #      flatten plugin moved to process-resources, Cudgel Troll regen timing fix)
 #   3. copies forge/forge-headless into the checkout
-#   4. mvn -pl forge-headless -am install -DskipTests  (puts forge-headless in ~/.m2)
+#   4. mvn -pl forge-headless -am install -DskipTests into the repo-local Maven repository
+#      battle-engine\.m2 (gitignored), which battle-engine's build also uses (.mvn/maven.config),
+#      so it doesn't matter which Windows account runs the build
 #
 # Usage (from anywhere):
 #   powershell -ExecutionPolicy Bypass -File battle-engine/setup-forge.ps1 [-Mvn <path-to-mvn>] [-ForgeDir <dir>] [-SkipBuild]
@@ -28,7 +30,13 @@ if (-not $ForgeDir) { $ForgeDir = Join-Path (Split-Path -Parent $here) 'forge-en
 $patch = Join-Path $here 'forge\campusforge-forge.patch'
 $headless = Join-Path $here 'forge\forge-headless'
 
-function Invoke-Git { git @args; if ($LASTEXITCODE -ne 0) { throw "git $args failed ($LASTEXITCODE)" } }
+# git writes progress to stderr; if this script's output is redirected, PS 5.1 would turn
+# that into a terminating error under 'Stop'. Relax it for the call and rely on the exit code.
+function Invoke-Git {
+    $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try { git @args 2>&1 | ForEach-Object { Write-Host "$_" } } finally { $ErrorActionPreference = $prev }
+    if ($LASTEXITCODE -ne 0) { throw "git $args failed ($LASTEXITCODE)" }
+}
 
 if (-not (Test-Path (Join-Path $ForgeDir '.git'))) {
     Write-Host "Cloning Forge into $ForgeDir (blobless, this takes a few minutes)..."
@@ -72,9 +80,9 @@ try {
 
     if (-not $SkipBuild) {
         Write-Host "Building forge-headless with '$Mvn'..."
-        & $Mvn -q -pl forge-headless -am install -DskipTests
+        & $Mvn -q "-Dmaven.repo.local=$(Join-Path $here '.m2')" -pl forge-headless -am install -DskipTests
         if ($LASTEXITCODE -ne 0) { throw "maven build failed ($LASTEXITCODE)" }
-        Write-Host 'forge-headless installed into the local Maven repository.'
+        Write-Host "forge-headless installed into $(Join-Path $here '.m2')"
     }
 } finally {
     Pop-Location

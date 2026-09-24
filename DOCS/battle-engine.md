@@ -14,7 +14,10 @@ by embedding the [Forge](https://github.com/Card-Forge/forge) engine headlessly.
 
 ### 1. Forge (once, and whenever `battle-engine/forge/` changes)
 
-The engine depends on `forge:forge-headless:2.0.14-SNAPSHOT` from the local Maven repo. It is built from upstream
+The engine depends on `forge:forge-headless:2.0.14-SNAPSHOT`, installed into the **repo-local Maven repository
+`battle-engine/.m2`** (gitignored). The scripts pass `-Dmaven.repo.local` and `battle-engine/.mvn/maven.config`
+sets it for plain `mvn` runs from `battle-engine/`, so builds work the same under any Windows account (an
+elevated prompt often runs as a different user with a different `~/.m2`). It is built from upstream
 Forge pinned to commit `fd8196a8`, plus:
 
 - `battle-engine/forge/forge-headless/`: the headless driver (`HeadlessMatch`, which sets the 20-life start, remote/human player
@@ -196,7 +199,8 @@ framework errors keep their 4xx status. `MatchManagerJoinTest` covers the join r
 
 | Symptom | Fix |
 | --- | --- |
-| `Could not resolve forge:forge-headless:2.0.14-SNAPSHOT` | Run `setup-forge.ps1` (it installs into `~/.m2`). |
+| `Could not resolve forge:forge-headless:2.0.14-SNAPSHOT` | Run `setup-forge.ps1` (it installs into `battle-engine/.m2`). If you build with plain `mvn`, run it from `battle-engine/` so `.mvn/maven.config` applies. |
+| `update` stopped with `taskkill … not found` | Fixed in the current script (a child process exiting with its parent is expected); pull and re-run. |
 | `Forge resource dir not found` | Run from `battle-engine/` with `forge-engine/` next to it, or pass `-Dforge.res.dir=...`. |
 | `error: patch failed` in setup-forge | The checkout has CRLF endings; delete `forge-engine/` and re-run (the script pins `core.eol=lf`). |
 | `Filename too long` while cloning | Windows path limit; the script sets `core.longpaths` and a sparse checkout. Keep the repo path short. |

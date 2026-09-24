@@ -126,7 +126,12 @@ function Stop-Backend {
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     if ($task -and $task.State -eq 'Running') { Stop-ScheduledTask -TaskName $TaskName; Ok 'scheduled task stopped' }
     $procs = @(Get-BackendProcesses)
+    # Killing a tree also kills children that are later in the list; taskkill then
+    # reports "process not found" on stderr, which PS 5.1 turns into a terminating
+    # error under 'Stop'. That is expected here, so don't let it abort.
+    $prevPref = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
     foreach ($p in $procs) { & taskkill /PID $p.ProcessId /T /F 2>&1 | Out-Null }
+    $ErrorActionPreference = $prevPref
     if ($procs.Count) { Ok "killed $($procs.Count) backend process(es)" } else { Ok 'no backend processes running' }
     if ($config.SUPABASE_URL -and $config.SUPABASE_SERVICE_ROLE_KEY) {
         if (Clear-PublishedUrl) { Ok 'published URL cleared (Battle tab hidden)' } else { Bad 'could not clear the published URL' }
@@ -204,7 +209,8 @@ switch ($Action) {
         Stop-Backend
         Say "`nBuilding with $mvn ..." 'Cyan'
         Push-Location $here
-        try { & $mvn -q clean package; $built = ($LASTEXITCODE -eq 0) } finally { Pop-Location }
+        # repo-local Maven repository: same forge-headless no matter which Windows account runs this
+        try { & $mvn -q "-Dmaven.repo.local=$(Join-Path $here '.m2')" clean package; $built = ($LASTEXITCODE -eq 0) } finally { Pop-Location }
         if (-not $built) { Bad 'build failed; engine left stopped (fix it, then run: battle-server.ps1 update)'; exit 1 }
         Ok 'engine jar rebuilt (tests passed)'
         Start-ScheduledTask -TaskName $TaskName
