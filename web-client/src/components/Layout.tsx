@@ -1,6 +1,7 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import OnboardingModal from './OnboardingModal'
+import { battleEngineConfigured } from '../api/battleConfig'
 
 const TABS = [
   {
@@ -61,6 +62,7 @@ function TabIcon({ icon }: { icon: React.ReactNode }) {
 export default function Layout() {
   const { player, logout } = useAuth()
   const navigate = useNavigate()
+  const tabs = TABS.filter((tab) => tab.to !== '/battle' || battleEngineConfigured())
 
   const onLogout = () => {
     logout()
@@ -71,7 +73,7 @@ export default function Layout() {
     <>
       <nav className="navbar">
         <span className="brand">Campus Forge</span>
-        {TABS.map((tab) => (
+        {tabs.map((tab) => (
           <NavLink key={tab.to} to={tab.to} className="nav-link">
             {tab.label}
           </NavLink>
@@ -86,7 +88,7 @@ export default function Layout() {
         <Outlet />
       </div>
       <nav className="tabbar">
-        {TABS.map((tab) => (
+        {tabs.map((tab) => (
           <NavLink key={tab.to} to={tab.to} className="tab-item">
             <TabIcon icon={tab.icon} />
             <span>{tab.label}</span>

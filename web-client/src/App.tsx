@@ -6,10 +6,12 @@ import TradePage from './pages/TradePage'
 import EventsPage from './pages/EventsPage'
 import DeckBuilderPage from './pages/DeckBuilderPage'
 import BattlePage from './pages/BattlePage'
+import BattleUnavailable from './pages/BattleUnavailable'
 import ScanPage from './pages/ScanPage'
 import ProfilePage from './pages/ProfilePage'
 import LeaderboardPage from './pages/LeaderboardPage'
 import Layout from './components/Layout'
+import { battleEngineConfigured } from './api/battleConfig'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { token } = useAuth()
@@ -34,7 +36,7 @@ export default function App() {
         <Route path="/collection/trades" element={<TradePage />} />
         <Route path="/collection/events" element={<EventsPage />} />
         <Route path="/decks" element={<DeckBuilderPage />} />
-        <Route path="/battle" element={<BattlePage />} />
+        <Route path="/battle" element={battleEngineConfigured() ? <BattlePage /> : <BattleUnavailable />} />
         <Route path="/scan" element={<ScanPage />} />
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/leaderboard" element={<LeaderboardPage />} />

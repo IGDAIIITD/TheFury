@@ -12,6 +12,16 @@ export function battleEngineOrigin(): string {
   return (import.meta.env.VITE_BATTLE_ENGINE_URL ?? '').replace(/\/+$/, '')
 }
 
+/**
+ * True when a battle engine origin is configured. When false the PWA is running
+ * without a battle backend (e.g. the GitHub Pages build with battles descoped):
+ * callers should hide/disable battle entry points rather than fall back to the
+ * same origin, which has no engine and would just error.
+ */
+export function battleEngineConfigured(): boolean {
+  return battleEngineOrigin().length > 0
+}
+
 /** REST base including origin; paths are like `/battle/matches`. */
 export function battleRestBase(): string {
   const origin = battleEngineOrigin()
