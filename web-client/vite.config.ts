@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
 // Deploy base path. GitHub Pages project sites live under `/<repo>/`, so CI
-// sets BASE_PATH=/TheFury/. Local dev/preview and the Deno `serve.mjs` keep '/'.
+// sets BASE_PATH=/TheFury/. Local dev/preview keep '/'.
 const base = process.env.BASE_PATH || '/'
 
 export default defineConfig({

@@ -1,7 +1,0 @@
-SLF4J(W): Class path contains multiple SLF4J providers.
-SLF4J(W): Found provider [ch.qos.logback.classic.spi.LogbackServiceProvider@6093dd95]
-SLF4J(W): Found provider [org.tinylog.slf4j.TinylogSlf4jServiceProvider@5622fdf]
-SLF4J(W): See https://www.slf4j.org/codes.html#multiple_bindings for an explanation.
-SLF4J(I): Actual provider is of type [ch.qos.logback.classic.spi.LogbackServiceProvider@6093dd95]
-Upcoming set Star Trek (TRK) dated in the future. All `upcoming` cards will be added to this set with unknown rarity.
-Upcoming set Star Trek (TRK) dated in the future. All `upcoming` cards will be added to this set with unknown rarity.

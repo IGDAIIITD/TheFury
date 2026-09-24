@@ -1,6 +1,6 @@
 # download-card-art.ps1 - Fetch card art from Scryfall for all catalog cards
 # Saves to card-art/ at repo root. Idempotent: skips existing files.
-# Usage: powershell -ExecutionPolicy Bypass -File setup/download-card-art.ps1
+# Usage: powershell -ExecutionPolicy Bypass -File scripts/download-card-art.ps1
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
