@@ -225,7 +225,7 @@ export default function ScanPage() {
         <form onSubmit={onManualSubmit} style={{ marginTop: 14, display: 'flex', gap: 8 }}>
           <input
             data-testid="manual-token"
-            placeholder="Enter code (e.g. COUNTSPELL01)"
+            placeholder="12-character code (e.g. H7KQ2MXP9RTA)"
             value={manualToken}
             onChange={(e) => setManualToken(e.target.value)}
             style={{ flex: 1, padding: 10 }}

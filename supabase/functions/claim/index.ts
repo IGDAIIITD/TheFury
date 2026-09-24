@@ -1,24 +1,28 @@
 // Claim Edge Function — consumes a signed QR token for an authenticated player.
 //
 // Auth:    REQUIRES the caller's Supabase JWT (Authorization: Bearer). The user
-//          id (sub) is resolved from the verified session via service-role client.
-// Body:    { "token": "<V1.CORE.SIG | bare core>" }
-// Errors:  CF400->400, CF403->403, CF404->404, CF409->409, CF410->410.
-// Rate:    claim scope, capacity 30 / refill 2.0 per sec PER USER+IP (token
-//          bucket, same shape as backend RateLimitFilter). 429 + Retry-After.
+//          id is resolved from the verified session via the service-role client.
+// Body:    { "token": "V1.<CORE>.<SIG>" }  (exactly what the QR code encodes), or a
+//          typed 12-char code for admin-spawned tokens (see below).
+// Errors:  400 bad/forged token, 401 no session, 403 banned, 404 unknown token,
+//          409 unique already claimed, 410 expired/revoked, 429 rate limited.
+// Rate:    token bucket per user, capacity 30 / refill 2 per sec (best effort:
+//          buckets live per isolate).
 //
-// Loyalty to backend semantics:
-//   * @NotBlank(token)  -> 400 "token is required"
-//   * signed tokens verified via HMAC-SHA256 constant-time (QrCodeSigner.verify)
-//   * bare cores accepted as-is (legacy claims.token_core path)
-//   * apply_claim RPC is service-role only, so clients cannot bypass verification
+// Signed tokens are verified (HMAC-SHA256, constant time) before any DB access.
+// Unsigned codes are accepted only for admin-spawned claims: print-catalog
+// cores are derived from public card ids, so accepting those unsigned would let
+// anyone claim every card.
+// apply_claim is service-role only, so this function is the only way in.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { verifyToken } from "../_shared/qr.ts";
+import { bearer, errorJson, json, preflight } from "../_shared/http.ts";
+import { signingSecret, TOKEN_ALPHABET, TOKEN_LENGTH, verifyToken } from "../_shared/qr.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const QR_SIGNING_SECRET = Deno.env.get("QR_SIGNING_SECRET") ?? "7c1e9d4a2f6b8c3d5e7a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e";
+
+const BARE_CORE_RE = new RegExp(`^[${TOKEN_ALPHABET}]{${TOKEN_LENGTH}}$`);
 
 const CLAIM_CAPACITY = 30;
 const CLAIM_REFILL_PER_SEC = 2.0;
@@ -66,60 +70,34 @@ function bucketFor(key: string): TokenBucket {
   return b;
 }
 
-function json(status: number, body: unknown, headers: Record<string, string> = {}) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      "Content-Type": "application/json",
-      "Cache-Control": "no-store",
-      ...headers,
-    },
-  });
-}
-
-function errorJson(status: number, message: string, headers: Record<string, string> = {}) {
-  return json(status, { status, message } satisfies { status: number; message: string }, headers);
-}
-
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response(null, {
-      status: 204,
-      headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "POST, OPTIONS", "Access-Control-Allow-Headers": "authorization, apikey, x-client-info, content-type" },
-    });
+  if (req.method === "OPTIONS") return preflight();
+  if (req.method !== "POST") return errorJson(405, "Method Not Allowed");
+
+  let secret: string;
+  try {
+    secret = signingSecret();
+  } catch (e) {
+    console.error(e);
+    return errorJson(500, "Claiming is not configured");
   }
-  if (req.method !== "POST") {
-    return errorJson(405, "Method Not Allowed");
-  }
+
+  const jwt = bearer(req);
+  if (!jwt) return errorJson(401, "Missing bearer token");
 
   const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
-  const authHeader = req.headers.get("Authorization") ?? "";
-  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
-  if (!token) {
-    return errorJson(401, "Missing bearer token");
-  }
-
-  const {
-    data: { user },
-    error: userError,
-  } = await supabase.auth.getUser(token);
-  if (userError || !user?.id) {
-    return errorJson(401, "Unauthorized");
-  }
+  const { data: { user }, error: userError } = await supabase.auth.getUser(jwt);
+  if (userError || !user?.id) return errorJson(401, "Unauthorized");
   const playerId = user.id;
 
-  // Fall back to IP when we somehow lack a user identity (shouldn't happen past
-  // auth, kept for RateLimitFilter parity).
-  const ip = req.headers.get("x-forwarded-for") ?? req.headers.get("x-real-ip") ?? "unknown";
-  const identity = playerId ? `user:${playerId}` : `ip:${ip}`;
-  const bucket = bucketFor(`claim:${identity}`);
+  const bucket = bucketFor(`claim:user:${playerId}`);
   if (!bucket.tryConsume()) {
     return errorJson(429, "Too Many Requests", { "Retry-After": String(bucket.secondsUntilRefill()) });
   }
 
-  let body: { token?: string };
+  let body: { token?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -128,34 +106,43 @@ Deno.serve(async (req) => {
   if (!body || typeof body.token !== "string" || body.token.trim() === "") {
     return errorJson(400, "token is required");
   }
-  const raw = body.token;
-  const normalized = raw.trim().toUpperCase();
+  if (body.token.length > 256) return errorJson(400, "Invalid or forged claim token");
 
+  const normalized = body.token.trim().toUpperCase();
   let core: string | null;
   if (normalized.includes(".")) {
-    core = await verifyToken(normalized, QR_SIGNING_SECRET);
-    if (core === null) {
-      return errorJson(400, "Invalid or forged claim token");
-    }
+    core = await verifyToken(normalized, secret);
   } else {
-    core = normalized;
+    // Typed code (manual entry). Only admin-spawned tokens qualify: their cores
+    // are random (~59 bits) and rate-limited. Print-catalog cores are derived
+    // from public card ids, so those must arrive signed (scanned). Missing and
+    // print-catalog cores get the same 400 so this is not an existence oracle.
+    core = null;
+    if (BARE_CORE_RE.test(normalized)) {
+      const { data: row, error } = await supabase
+        .from("claims")
+        .select("spawned_by")
+        .eq("token_core", normalized)
+        .maybeSingle();
+      if (error) {
+        console.error("claim lookup failed", error);
+        return errorJson(500, "Claim failed");
+      }
+      if (row?.spawned_by) core = normalized;
+    }
   }
+  if (core === null) return errorJson(400, "Invalid or forged claim token");
 
-  const { data, error } = await supabase.rpc("apply_claim", {
-    p_core: core,
-    p_player: playerId,
-  });
-
+  const { data, error } = await supabase.rpc("apply_claim", { p_core: core, p_player: playerId });
   if (error) {
-    // error.code is the SQLSTATE ('CF404', ...) set via `using errcode`.
+    // error.code is the SQLSTATE ('CF404', ...) raised via `using errcode`.
     const code: string = error.code ?? "";
     if (code.startsWith("CF")) {
       const status = Number(code.slice(2));
-      if (status >= 400 && status < 500) {
-        return errorJson(status, error.message ?? "Claim failed");
-      }
+      if (status >= 400 && status < 500) return errorJson(status, error.message ?? "Claim failed");
     }
-    return errorJson(500, error.message ?? "Claim failed");
+    console.error("apply_claim failed", error);
+    return errorJson(500, "Claim failed");
   }
 
   return json(200, data);

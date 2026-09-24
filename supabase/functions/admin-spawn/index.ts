@@ -1,75 +1,58 @@
 // Admin spawn Edge Function — mints signed QR claim tokens for a card.
 //
-// Auth:    REQUIRES the caller's Supabase JWT (Authorization: Bearer); the
-//          caller's profile must have role = 'ADMIN'.
+// Auth:    REQUIRES the caller's Supabase JWT; profiles.role must be 'ADMIN'.
 // Body:    { cardId, quantity?, building?, expiresAt?, eventId? }
-// Errors:  400 bad input, 401 missing/invalid token, 403 not admin, 404 card/
-//          event not found, 500 insert failure.
+// Returns: 201 [{ id, token, cardId, forgeName, building, expiresAt, status,
+//          eventId, eventName, spawnedBy, createdAt }] — `token` is the QR text.
+// Errors:  400 bad input, 401 no session, 403 not admin, 404 card/event missing,
+//          500 insert failure / signing not configured.
 //
-// Mirrors backend AdminClaimController.mint / ClaimService.mint: random 12-char
-// core from TOKEN_ALPHABET, signed "V1.<CORE>.<SIG>", quantity capped at 100,
-// optional building/expiry/event, spawned_by = admin, plus a SPAWN feed entry.
+// Random 12-char core from the token alphabet (rejection-sampled, no modulo
+// bias), signed "V1.<CORE>.<SIG>", quantity 1..100, optional building / expiry
+// / event, spawned_by = admin, plus a SPAWN feed entry and game_log row.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { sign } from "../_shared/qr.ts";
+import { bearer, errorJson, json, preflight } from "../_shared/http.ts";
+import { sign, signingSecret, TOKEN_ALPHABET, TOKEN_LENGTH } from "../_shared/qr.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const QR_SIGNING_SECRET =
-  Deno.env.get("QR_SIGNING_SECRET") ?? "7c1e9d4a2f6b8c3d5e7a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e";
-
-const TOKEN_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
-const TOKEN_LENGTH = 12;
 const MAX_MINT_QUANTITY = 100;
-
-function json(status: number, body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
-  });
-}
-
-function errorJson(status: number, message: string) {
-  return json(status, { status, message });
-}
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function randomCore(): string {
-  const bytes = new Uint8Array(TOKEN_LENGTH);
-  crypto.getRandomValues(bytes);
+  // largest multiple of the alphabet size below 256, to avoid modulo bias
+  const limit = 256 - (256 % TOKEN_ALPHABET.length);
   let s = "";
-  for (let i = 0; i < TOKEN_LENGTH; i++) {
-    s += TOKEN_ALPHABET[bytes[i] % TOKEN_ALPHABET.length];
+  while (s.length < TOKEN_LENGTH) {
+    const bytes = new Uint8Array(TOKEN_LENGTH * 2);
+    crypto.getRandomValues(bytes);
+    for (const b of bytes) {
+      if (b < limit && s.length < TOKEN_LENGTH) s += TOKEN_ALPHABET[b % TOKEN_ALPHABET.length];
+    }
   }
   return s;
 }
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "authorization, apikey, x-client-info, content-type",
-      },
-    });
+  if (req.method === "OPTIONS") return preflight();
+  if (req.method !== "POST") return errorJson(405, "Method Not Allowed");
+
+  let secret: string;
+  try {
+    secret = signingSecret();
+  } catch (e) {
+    console.error(e);
+    return errorJson(500, "QR signing is not configured");
   }
-  if (req.method !== "POST") {
-    return errorJson(405, "Method Not Allowed");
-  }
+
+  const jwt = bearer(req);
+  if (!jwt) return errorJson(401, "Missing bearer token");
 
   const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
-
-  const authHeader = req.headers.get("Authorization") ?? "";
-  const jwt = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
-  if (!jwt) return errorJson(401, "Missing bearer token");
-
-  const {
-    data: { user },
-    error: userError,
-  } = await supabase.auth.getUser(jwt);
+  const { data: { user }, error: userError } = await supabase.auth.getUser(jwt);
   if (userError || !user?.id) return errorJson(401, "Unauthorized");
 
   const { data: admin, error: adminError } = await supabase
@@ -77,15 +60,15 @@ Deno.serve(async (req) => {
     .select("role, display_name")
     .eq("id", user.id)
     .maybeSingle();
-  if (adminError) return errorJson(500, adminError.message);
+  if (adminError) return errorJson(500, "Could not verify admin role");
   if (!admin || admin.role !== "ADMIN") return errorJson(403, "Admin access required");
 
   let body: {
-    cardId?: string;
-    quantity?: number;
-    building?: string | null;
-    expiresAt?: string | null;
-    eventId?: string | null;
+    cardId?: unknown;
+    quantity?: unknown;
+    building?: unknown;
+    expiresAt?: unknown;
+    eventId?: unknown;
   };
   try {
     body = await req.json();
@@ -93,15 +76,28 @@ Deno.serve(async (req) => {
     return errorJson(400, "Invalid JSON body");
   }
 
-  if (!body?.cardId || typeof body.cardId !== "string") {
+  if (typeof body?.cardId !== "string" || !UUID_RE.test(body.cardId)) {
     return errorJson(400, "cardId is required");
   }
   const quantity = body.quantity == null ? 1 : Number(body.quantity);
-  if (!Number.isInteger(quantity) || quantity < 1) {
-    return errorJson(400, "quantity must be at least 1");
+  if (!Number.isInteger(quantity) || quantity < 1) return errorJson(400, "quantity must be at least 1");
+  if (quantity > MAX_MINT_QUANTITY) return errorJson(400, `quantity must not exceed ${MAX_MINT_QUANTITY}`);
+
+  const building = typeof body.building === "string" && body.building.trim() ? body.building.trim() : null;
+  if (building && building.length > 80) return errorJson(400, "building must be at most 80 characters");
+
+  let expiresAt: string | null = null;
+  if (body.expiresAt != null && body.expiresAt !== "") {
+    const t = typeof body.expiresAt === "string" ? Date.parse(body.expiresAt) : NaN;
+    if (Number.isNaN(t)) return errorJson(400, "expiresAt must be an ISO timestamp");
+    if (t <= Date.now()) return errorJson(400, "expiresAt must be in the future");
+    expiresAt = new Date(t).toISOString();
   }
-  if (quantity > MAX_MINT_QUANTITY) {
-    return errorJson(400, `quantity must not exceed ${MAX_MINT_QUANTITY}`);
+
+  let eventId: string | null = null;
+  if (body.eventId != null && body.eventId !== "") {
+    if (typeof body.eventId !== "string" || !UUID_RE.test(body.eventId)) return errorJson(400, "eventId must be a uuid");
+    eventId = body.eventId;
   }
 
   const { data: card, error: cardError } = await supabase
@@ -113,44 +109,40 @@ Deno.serve(async (req) => {
   if (!card) return errorJson(404, `Card not found: ${body.cardId}`);
 
   let eventName: string | null = null;
-  if (body.eventId) {
+  if (eventId) {
     const { data: event, error: eventError } = await supabase
       .from("events")
       .select("id, name")
-      .eq("id", body.eventId)
+      .eq("id", eventId)
       .maybeSingle();
     if (eventError) return errorJson(500, eventError.message);
-    if (!event) return errorJson(404, `Event not found: ${body.eventId}`);
+    if (!event) return errorJson(404, `Event not found: ${eventId}`);
     eventName = event.name;
   }
 
-  const building = body.building?.trim() ? body.building.trim() : null;
-  const expiresAt = body.expiresAt ?? null;
   const minted: Record<string, unknown>[] = [];
-
   for (let i = 0; i < quantity; i++) {
     let inserted: Record<string, unknown> | null = null;
     for (let attempt = 0; attempt < 5 && !inserted; attempt++) {
       const core = randomCore();
-      const full = await sign(core, QR_SIGNING_SECRET);
+      const token = await sign(core, secret);
       const { data, error } = await supabase
         .from("claims")
         .insert({
           id: crypto.randomUUID(),
-          token: full,
+          token,
           token_core: core,
           card_id: card.id,
           building,
           expires_at: expiresAt,
           status: "ACTIVE",
-          event_id: body.eventId ?? null,
+          event_id: eventId,
           spawned_by: user.id,
         })
         .select("*")
         .single();
       if (error) {
-        // 23505 = unique_violation on token_core; retry with a new core.
-        if (error.code === "23505") continue;
+        if (error.code === "23505") continue; // token_core collision; retry
         return errorJson(500, error.message);
       }
       inserted = data;
@@ -171,14 +163,19 @@ Deno.serve(async (req) => {
     });
   }
 
-  const text =
-    `spawned ${quantity} token(s) for ${card.forge_name}` + (building ? ` at ${building}` : "");
-  await supabase.rpc("add_feed_entry", {
-    p_type: "SPAWN",
-    p_text: text,
-    p_player: user.id,
-    p_card: card.id,
-  });
+  const message = `spawned ${quantity} token(s) for ${card.forge_name}` + (building ? ` at ${building}` : "");
+  const [feed, log] = await Promise.all([
+    supabase.rpc("add_feed_entry", { p_type: "SPAWN", p_text: message, p_player: user.id, p_card: card.id }),
+    supabase.from("game_log").insert({
+      kind: "SPAWN",
+      player_id: user.id,
+      card_id: card.id,
+      ref_id: eventId,
+      detail: { quantity, building, expiresAt, claimIds: minted.map((m) => m.id) },
+    }),
+  ]);
+  if (feed.error) console.error("feed entry failed", feed.error);
+  if (log.error) console.error("game_log insert failed", log.error);
 
   return json(201, minted);
 });
