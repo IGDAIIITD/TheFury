@@ -1,3 +1,8 @@
+> **Historical document.** This is the original product and architecture plan (v2). It predates the move to
+> Supabase: sections on the Spring backend, persistence, API and development phases describe a system that no
+> longer exists, and some features (marketplace, regions, ...) were never built. It is kept for the game vision.
+> For how things work **today**, start at [DOCS/README.md](../README.md).
+
 # Campus Forge
 
 ## Technical Architecture Overview (v2)

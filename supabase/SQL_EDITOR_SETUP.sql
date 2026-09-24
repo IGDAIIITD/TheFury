@@ -529,8 +529,8 @@ with check (player_id = auth.uid());
 -- Deadlock-avoidance rule preserved: row locks in sorted-UUID order.
 --
 -- Faithful ports of the Java semantics (ClaimService, CollectionService,
--- TradeService, MatchManager, FeedService) — see the fix list in
--- STEPS/supabase-migration-map.md.
+-- TradeService, MatchManager, FeedService). The resulting rules are
+-- documented in DOCS/game-rules.md and DOCS/database.md.
 
 -- ---------------------------------------------------------------
 -- Feed ring (moved here from migration 8/9 so the definer functions
