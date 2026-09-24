@@ -245,12 +245,19 @@ function ActionBar({
   )
 }
 
+/** The engine's error body is { code, message }; surface its message when present. */
+function engineMessage(err: unknown): string | null {
+  const message = (err as { response?: { data?: { message?: unknown } } })?.response?.data?.message
+  return typeof message === 'string' && message.trim() ? message : null
+}
+
 export default function BattlePage() {
   const { player } = useAuth()
   const [matches, setMatches] = useState<MatchDto[]>([])
   const [decks, setDecks] = useState<DeckDto[]>([])
   const [selectedDeckId, setSelectedDeckId] = useState('')
   const [joinCode, setJoinCode] = useState('')
+  const [busy, setBusy] = useState(false)
   const [activeMatch, setActiveMatch] = useState<MatchDto | null>(null)
   const [gameState, setGameState] = useState<MatchState | null>(null)
   const [info, setInfo] = useState('')
@@ -482,56 +489,64 @@ export default function BattlePage() {
     })
   }
 
-  const startVsAi = async () => {
-    if (!selectedDeckId) return setNotice('Please select a deck first.')
+  // One lobby request at a time: starting/joining a game takes a moment on the
+  // engine (deck conversion + Forge start), and a second click used to send a
+  // duplicate request (e.g. a join that then failed with 409).
+  const lobbyAction = async (action: () => Promise<void>, fallback: string) => {
+    if (busy) return
+    setBusy(true)
     try {
+      await action()
+    } catch (err) {
+      setNotice(engineMessage(err) ?? fallback)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const startVsAi = () => {
+    if (!selectedDeckId) return setNotice('Please select a deck first.')
+    return lobbyAction(async () => {
       const m = await createMatch(selectedDeckId)
       setActiveMatch(m)
       setGameState(null)
       setMatches(await listMatches())
-    } catch {
-      setNotice('Failed to start match.')
-    }
+    }, 'Failed to start match.')
   }
 
-  const startLobby = async () => {
+  const startLobby = () => {
     if (!selectedDeckId) return setNotice('Please select a deck first.')
-    try {
+    return lobbyAction(async () => {
       const m = await createLobby(selectedDeckId)
       setActiveMatch(m)
       setGameState(null)
       setNotice('')
       setMatches(await listMatches())
-    } catch {
-      setNotice('Failed to create battle lobby.')
-    }
+    }, 'Failed to create battle lobby.')
   }
 
-  const joinLobby = async () => {
+  const joinLobby = () => {
     const code = joinCode.trim().toUpperCase()
     if (!code) return setNotice('Enter a battle code to join.')
     if (!selectedDeckId) return setNotice('Please select a deck first.')
-    try {
+    return lobbyAction(async () => {
       const m = await joinMatch(code, selectedDeckId)
       setActiveMatch(m)
       setGameState(null)
+      setJoinCode('')
       setNotice('')
       setMatches(await listMatches())
-    } catch {
-      setNotice('Failed to join battle. Check the code.')
-    }
+    }, 'Failed to join battle. Check the code.')
   }
 
-  const handleConcede = async () => {
+  const handleConcede = () => {
     if (!activeMatch) return
-    try {
+    return lobbyAction(async () => {
       await concedeMatch(activeMatch.id)
       setActiveMatch(null)
       setGameState(null)
       setMatches(await listMatches())
-    } catch {
-      setNotice('Failed to concede.')
-    }
+    }, 'Failed to concede.')
   }
 
   const backToLobby = async () => {
@@ -719,7 +734,7 @@ export default function BattlePage() {
                 Back to Lobby
               </button>
             ) : (
-              <button className="btn danger" onClick={handleConcede}>
+              <button className="btn danger" onClick={handleConcede} disabled={busy}>
                 Concede
               </button>
             )}
@@ -907,7 +922,7 @@ export default function BattlePage() {
                   </option>
                 ))}
               </select>
-              <button className="btn" onClick={startLobby}>
+              <button className="btn" onClick={startLobby} disabled={busy}>
                 Create Battle Lobby
               </button>
             </div>
@@ -919,13 +934,13 @@ export default function BattlePage() {
                 style={{ minWidth: 180, textTransform: 'uppercase', letterSpacing: 2, fontFamily: 'monospace' }}
                 maxLength={6}
               />
-              <button className="btn" onClick={joinLobby}>
+              <button className="btn" onClick={joinLobby} disabled={busy}>
                 Join Battle
               </button>
             </div>
             {aiEnabled && (
               <div className="filters" style={{ marginTop: 12 }}>
-                <button className="btn" onClick={startVsAi}>
+                <button className="btn" onClick={startVsAi} disabled={busy}>
                   Start AI Battle
                 </button>
               </div>

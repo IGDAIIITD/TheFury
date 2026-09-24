@@ -76,7 +76,7 @@ export default function BattleCard({
       role={interactive ? 'button' : undefined}
       aria-pressed={selected}
     >
-      <CardArt name={card.name} />
+      <CardArt name={card.name} loading="eager" />
       <div className="name">{card.name}</div>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, alignItems: 'center' }}>
         <span className="meta">{card.type ?? 'Permanent'}</span>

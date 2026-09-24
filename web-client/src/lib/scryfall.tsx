@@ -11,8 +11,19 @@ export function scryfallArtUrl(name: string): string {
   return STORAGE_BASE ? `${STORAGE_BASE}/${slug}.jpg` : `/card-art/${slug}.jpg`
 }
 
-/** Renders card art with hidden-on-error fallback. */
-export function CardArt({ name, className }: { name: string; className?: string }) {
+/**
+ * Renders card art with hidden-on-error fallback. Grids of many cards keep the
+ * default lazy loading; always-visible boards (battle) pass loading="eager".
+ */
+export function CardArt({
+  name,
+  className,
+  loading = 'lazy',
+}: {
+  name: string
+  className?: string
+  loading?: 'lazy' | 'eager'
+}) {
   const [error, setError] = useState(false)
   if (error) return null
   return (
@@ -20,7 +31,7 @@ export function CardArt({ name, className }: { name: string; className?: string 
       className={className ?? 'card-art'}
       src={scryfallArtUrl(name)}
       alt={name}
-      loading="lazy"
+      loading={loading}
       draggable={false}
       onError={() => setError(true)}
     />
