@@ -1,4 +1,4 @@
 # Applied with git apply against an LF checkout; keep byte-exact.
 *.patch -text
-# Maven reads this file line by line; keep it LF so no  ends up in paths.
+# Maven reads this file line by line; keep it LF so no carriage return ends up in paths.
 battle-engine/.mvn/maven.config text eol=lf
