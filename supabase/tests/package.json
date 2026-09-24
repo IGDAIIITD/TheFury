@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node schema.test.mjs"
+    "test": "node schema.test.mjs && node setup-file.test.mjs",
+    "build:setup-sql": "node build-setup-sql.mjs"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.8"
