@@ -8,9 +8,12 @@ import './index.css'
 
 registerSW({ immediate: true })
 
+// Vite's base ('/TheFury/' on GitHub Pages, '/' locally) is the router basename.
+const basename = import.meta.env.BASE_URL.replace(/\/$/, '') || '/'
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <BrowserRouter>
+    <BrowserRouter basename={basename}>
       <AuthProvider>
         <App />
       </AuthProvider>
