@@ -20,6 +20,7 @@ import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
@@ -111,19 +112,36 @@ public class MatchManager {
         }
         SupabaseMatch match = supabase.findByBattleCode(code.trim().toUpperCase())
                 .orElseThrow(() -> new IllegalArgumentException("Battle code not found"));
-        if (!"WAITING".equals(match.status())) {
-            throw new IllegalStateException("Battle is no longer open");
-        }
         if (match.player1Id().equals(player2Id)) {
             throw new IllegalArgumentException("Cannot join your own battle");
         }
+        if (!"WAITING".equals(match.status())) {
+            // A retried/double-submitted join by the player who already joined is
+            // not an error: hand back the running match.
+            if (isAlreadyJoinedBy(match, player2Id)) {
+                return MatchDto.from(match);
+            }
+            throw new IllegalStateException("Battle is no longer open");
+        }
         SupabaseDeck d2 = requireOwnedDeck(deck2Id, player2Id, "Deck is invalid for battle", match.eventId());
 
-        SupabaseMatch active = supabase.activateMatch(match.id(), player2Id, deck2Id)
-                .orElseThrow(() -> new IllegalStateException("Could not join battle"));
+        // Atomic: only one concurrent joiner flips WAITING -> ACTIVE.
+        Optional<SupabaseMatch> claimed = supabase.activateMatch(match.id(), player2Id, deck2Id);
+        if (claimed.isEmpty()) {
+            SupabaseMatch now = supabase.findMatch(match.id()).orElse(null);
+            if (now != null && isAlreadyJoinedBy(now, player2Id)) {
+                return MatchDto.from(now); // our own concurrent request won
+            }
+            throw new IllegalStateException("Battle is no longer open");
+        }
+        SupabaseMatch active = claimed.get();
 
         startGame(active.id(), active.player1Id(), active.deck1Id(), player2Id, deck2Id);
         return MatchDto.from(active);
+    }
+
+    private static boolean isAlreadyJoinedBy(SupabaseMatch match, UUID player2Id) {
+        return "ACTIVE".equals(match.status()) && player2Id.equals(match.player2Id());
     }
 
     public void startGame(UUID matchId, UUID player1Id, UUID deck1Id, UUID player2Id, UUID deck2Id) {

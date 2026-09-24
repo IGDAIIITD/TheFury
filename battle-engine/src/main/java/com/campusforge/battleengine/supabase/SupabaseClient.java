@@ -283,13 +283,17 @@ public class SupabaseClient {
         }
     }
 
-    /** Patches the matches row for a join (second player + deck, active). */
+    /**
+     * Claims a WAITING lobby for the second player. The update is conditional on
+     * {@code status = WAITING} (a single Postgres UPDATE ... WHERE), so exactly one
+     * of several concurrent joiners wins; the others get an empty result.
+     */
     public Optional<SupabaseMatch> activateMatch(UUID matchId, UUID player2Id, UUID deck2Id) {
         Map<String, Object> body = new HashMap<>();
         body.put("player2_id", player2Id.toString());
         body.put("deck2_id", deck2Id.toString());
         body.put("status", "ACTIVE");
-        return patchMatch(matchId, body);
+        return patchMatch(matchId, body, "&status=eq.WAITING");
     }
 
     /** Records the terminal state via the service-role RPC (XP + feed + status). */
@@ -320,7 +324,12 @@ public class SupabaseClient {
     }
 
     private Optional<SupabaseMatch> patchMatch(UUID matchId, Map<String, Object> body) {
-        String url = baseUrl + "/rest/v1/matches?id=eq." + matchId;
+        return patchMatch(matchId, body, "");
+    }
+
+    /** PATCH with extra PostgREST filters (e.g. "&status=eq.WAITING"); empty = no row matched. */
+    private Optional<SupabaseMatch> patchMatch(UUID matchId, Map<String, Object> body, String extraFilter) {
+        String url = baseUrl + "/rest/v1/matches?id=eq." + matchId + extraFilter;
         try {
             HttpRequest req = HttpRequest.newBuilder(URI.create(url))
                     .header("apikey", serviceRoleKey)
@@ -336,7 +345,9 @@ public class SupabaseClient {
                     return Optional.of(parseMatch(arr.get(0)));
                 }
             }
-            log.warn("patchMatch {} status {}", matchId, res.statusCode());
+            if (res.statusCode() != 200 || extraFilter.isEmpty()) {
+                log.warn("patchMatch {} status {}", matchId, res.statusCode());
+            }
             return Optional.empty();
         } catch (Exception e) {
             log.warn("patchMatch {} failed", matchId, e);
