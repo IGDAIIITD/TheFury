@@ -62,8 +62,8 @@ identical either way.
 
 ## Edge Functions (BUILT)
 
-- `claim` (`supabase/functions/claim/index.ts`) — `V1.<CORE>.<SIG>` verify (HMAC-SHA256 constant-time via WebCrypto), bare-core fallback, per-user+IP token bucket rate limit (`429`+`Retry-After`, capacity 30 / 2.0 per sec matching `RateLimitFilter`), then calls service-role `apply_claim` RPC (clients can't bypass signature check). Error mapping: errcode `CF400`→400, `CF403`→403, `CF404`→404, `CF409`→409, `CF410`→410.
-- `qr-catalog` (`supabase/functions/qr-catalog/index.ts`) — admin-gated, GET json|csv + POST regenerate. Deterministic cores via `_shared/qr.ts` `SHA-256("cf-print:" + cardId)`→12 chars; tokens signed in EF (secret env `QR_SIGNING_SECRET`, dev default matches Spring); idempotent claim rows via PG fn `ensure_print_claim`.
+- `claim` (`supabase/functions/claim/index.ts`) — `V1.<CORE>.<SIG>` verify (HMAC-SHA256 constant-time via WebCrypto), unsigned 12-char codes only for admin-spawned claims (migration 13 era), per-user token bucket rate limit (`429`+`Retry-After`, capacity 30 / 2.0 per sec matching `RateLimitFilter`), then calls service-role `apply_claim` RPC (clients can't bypass signature check). Error mapping: errcode `CF400`→400, `CF403`→403, `CF404`→404, `CF409`→409, `CF410`→410.
+- `qr-catalog` (`supabase/functions/qr-catalog/index.ts`) — admin-gated, GET json|csv + POST regenerate. Deterministic cores via `_shared/qr.ts` `SHA-256("cf-print:" + cardId)`→12 chars; tokens signed in EF (required secret `QR_SIGNING_SECRET`, no default); JSON export is `[{cardName, qrContent}]`; idempotent claim rows via PG fn `ensure_print_claim`.
 - Shared crypto (`supabase/functions/_shared/qr.ts`): `deterministicCore`, `sign`, `verifyToken` — ports of `ClaimService.deterministicCore`/`QrCodeSigner` (incl. 31-char alphabet, big-endian 6-byte long, repeated `% 31`).
 - Local serve: `supabase functions serve claim qr-catalog` (needs `supabase start` state); the runtime boots from `supabase/functions/` per-worker; Kong proxies `/functions/v1/<name>`.
 

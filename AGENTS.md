@@ -1,46 +1,53 @@
 # AGENTS.md
 
-Campus Forge: a campus-wide collectible MTG game. **Current stack: Supabase is the backend** (Postgres + RLS + RPC + Auth + Storage + Edge Functions + Realtime); the **Vite/React PWA on GitHub Pages** is the client and talks to Supabase directly; a standalone **`battle-engine/`** Spring Boot service wraps the Forge headless rules engine. `backend/` (Spring Boot + Flyway) is the **legacy** pre-Supabase server — reference only, don't extend.
+Campus Forge: a campus-wide collectible MTG game. **Supabase is the backend** (Postgres + RLS + RPC + Auth + Storage + Edge Functions + Realtime); the **Vite/React PWA on GitHub Pages** is the client and talks to Supabase directly; a standalone **`battle-engine/`** Spring Boot service wraps the Forge headless rules engine. The pre-Supabase Spring backend was deleted (see git history before `2c195d4` if you need its semantics).
 
 ## Layout
 - `web-client/` — Vite + React 18 + TS PWA; `src/api/*` is the only layer that talks to Supabase. Deployed to GitHub Pages under `/TheFury/`.
-- `supabase/` — `migrations/*.sql` (schema source of truth), `functions/` (Edge Functions), `seed.sql`, `SQL_EDITOR_SETUP.sql` (consolidated paste for a fresh hosted project).
-- `battle-engine/` — Spring Boot 3.3 service (port **17175**) embedding `forge-engine/forge-headless`. In-memory match state, no DB; validates Supabase JWTs; writes results via a service-role RPC. Not part of the Pages build. Run env: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, `CAMPUSFORGE_CORS_ALLOWED_ORIGINS`.
-- `admin-console/` — Vite admin app, rewritten to Supabase, **not deployed** (use the Supabase dashboard instead).
-- `forge-engine/` — full Forge fork (its own git repo). `forge-headless` is what battle-engine embeds.
-- `backend/`, `docker/`, `setup/`, root `restart-*.ps1` / `start-backend.cmd`, `web-client/serve.mjs` + `scripts/*.cjs` — **legacy** (target the pre-Supabase backend).
-- Docs: `THEPLAN.md` (architecture bible), `STEPS/supabase-migration-map.md` (migration mapping), `TECHNICAL.md` (describes the legacy backend).
+- `supabase/` — `migrations/*.sql` (schema source of truth), `functions/` (Edge Functions), `seed.sql`, `SQL_EDITOR_SETUP.sql` (**generated**: one-paste bootstrap for a fresh project), `tests/` (PGlite schema suite + the generator).
+- `battle-engine/` — Spring Boot 3.3 service (port **17175**) embedding `forge-headless`. In-memory match state; validates Supabase JWTs via JWKS; writes via service-role RPCs. Not part of the Pages build. Setup + deploy guide: `battle-engine/README.md`.
+- `battle-engine/forge/` — the vendored `forge-headless` module + `campusforge-forge.patch` against upstream Forge `fd8196a8`. `forge-engine/` (repo root) is a **gitignored** Forge checkout recreated by `battle-engine/setup-forge.ps1`; never edit it directly — change `battle-engine/forge/` and re-run the script.
+- `admin-console/` — Vite admin app on Supabase, **not deployed** (`npm run dev`, port 17173).
+- `scripts/download-card-art.ps1` — Scryfall art download + upload to the `card-art` bucket.
+- Docs: `README.md` (overview + production checklist), `THEPLAN.md` (original design; mentions the old backend), `STEPS/supabase-migration-map.md` (Java→Supabase mapping).
 
 ## Commands
-- Node is on PATH (v20). **Maven is NOT** — use `C:\Users\student\AppData\Local\Temp\opencode\apache-maven-3.9.9\bin\mvn.cmd` (prepend to `$env:Path`) and run from the module dir.
-- web-client (from `web-client/`): `npm run lint` = `tsc --noEmit` (there is no ESLint); `npm test` = `vitest run`; `npm run build` = `tsc -b && vite build`.
-- **After editing frontend code run `npm run lint` AND `npm test`; also run `npm run build` when serving `dist/` — Deno `serve.mjs` / e2e read `dist/`, not `src/`.**
+- Node is on PATH (v20), Deno too. **Maven is NOT** — use `C:\Users\student\AppData\Local\Temp\opencode\apache-maven-3.9.9\bin\mvn.cmd` (prepend to `$env:Path`) and run from the module dir.
+- web-client (from `web-client/`): `npm run lint` = `tsc --noEmit` (there is no ESLint); `npm test` = `vitest run`; `npm run build` = `tsc -b && vite build`. **After editing frontend code run `npm run lint` AND `npm test`.**
 - Pages build: `BASE_PATH=/TheFury/ npm run build` (Vite `base` = `BASE_PATH` env, default `/`).
 - Focused test: `npm test -- src/pages/LoginPage.test.tsx` (or `-t "<name>"`).
-- battle-engine build order matters: build forge first (`mvn -pl forge-headless -am install -DskipTests` in `forge-engine/`), then `mvn clean package -DskipTests` in `battle-engine/`.
+- Supabase schema tests (from `supabase/tests/`): `npm ci && npm test` — applies every migration + seed to PGlite behind `shim.sql` (Supabase roles, `auth.uid()`, default grants) and checks RLS/privileges/RPC flows; also fails if `SQL_EDITOR_SETUP.sql` is stale. **After adding a migration: add checks to `schema.test.mjs`, then `npm run build:setup-sql`.**
+- Edge Functions: `deno test --allow-env supabase/functions/_shared/qr.test.ts`; `deno check supabase/functions/<name>/index.ts`.
+- battle-engine: `setup-forge.ps1 -Mvn <mvn.cmd>` first (installs `forge-headless` into `~/.m2`), then `mvn clean package` in `battle-engine/`.
 
 ## Supabase
 - Hosted project ref `prjsiywvhxqnsvsmfgxm` (URL + publishable key in `web-client/.env.development`; **public by design**). Root `.env` (gitignored) holds the service-role key.
-- **Schema changes = a new file in `supabase/migrations/`; never hand-edit schema via the dashboard.** Migrations 00–10 use plain `CREATE` (not safe to re-run wholesale); 11–12 are idempotent.
-- **The hosted DB has no `supabase_migrations` table** (it was provisioned by pasting `SQL_EDITOR_SETUP.sql`), so **`supabase db push` is unusable**. Apply DDL to hosted via the Management API `POST https://api.supabase.com/v1/projects/{ref}/database/query` (PAT auth; accepts multi-statement + `do $$` bodies) or the SQL Editor.
-- Edge Functions `claim`, `qr-catalog`, `admin-spawn` (+ `_shared/qr.ts`): deploy with `SUPABASE_ACCESS_TOKEN=… supabase functions deploy <name> --project-ref <ref>`. The CLI bundles `_shared/` itself and does **not** need Docker. `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` are auto-injected; `QR_SIGNING_SECRET` is a project secret.
-- Auth: email/password, `mailer_autoconfirm` on (no email confirmation). `profiles` is 1:1 with `auth.users` via the `handle_new_user` trigger.
+- **Schema changes = a new file in `supabase/migrations/`; never hand-edit schema via the dashboard.** Migrations 00–10 use plain `CREATE` (not re-runnable); **11+ must be idempotent** (the test suite re-runs them).
+- **The hosted DB has no `supabase_migrations` table** (provisioned by pasting `SQL_EDITOR_SETUP.sql`), so **`supabase db push` is unusable**. Apply new migration files via the SQL Editor or the Management API `POST https://api.supabase.com/v1/projects/{ref}/database/query` (PAT auth).
+- **Function privileges are deny-by-default (migration 13).** Supabase grants EXECUTE on new public functions to `anon`/`authenticated` *directly*, so `revoke ... from public` alone does nothing. Every new function must end with an explicit `revoke execute ... from public, anon, authenticated;` + `grant execute ... to <role>`. Client-callable RPCs must derive the actor from `auth.uid()` and reject NULL.
+- `profiles`: players may only change display name/avatar/student id/cohort/onboarding/last_login (`trg_profiles_guard`); role/XP/level/banned change only via admins or definer functions.
+- Players have **no direct write** on unlocks, discoveries, achievements, trades, trade_cards or game_log — those go through `apply_claim` (service role, via the `claim` EF), the trade RPCs, `grant_starter_pack`, `record_match_result`.
+- `game_log` = durable append-only history (CLAIM/TRADE/MATCH/STARTER/SPAWN). `activity_feed` = 50-row UI ring. Realtime publication: `activity_feed`, `trades`.
+- Edge Functions `claim`, `qr-catalog`, `admin-spawn` (+ `_shared/qr.ts`, `_shared/http.ts`): deploy with `SUPABASE_ACCESS_TOKEN=… supabase functions deploy <name> --project-ref <ref>` (no Docker). **Every response needs `CORS_HEADERS`** (use `_shared/http.ts` helpers) or browsers on Pages drop it. `QR_SIGNING_SECRET` (≥32 chars) is a required project secret — no fallback.
+- Auth: email/password, `mailer_autoconfirm` on. `profiles` is 1:1 with `auth.users` via `handle_new_user`, which also stores a valid cohort from signup metadata and calls `grant_starter_pack`.
 - Card art: public Storage bucket `card-art` (`{slug}.jpg`); `src/lib/scryfall.tsx` returns the storage URL when `VITE_SUPABASE_URL` is set, else local `/card-art/`.
 
 ## Frontend / Pages gotchas
 - **The router basename must come from Vite's base** (`main.tsx`: `import.meta.env.BASE_URL`). Omit it and the Pages subpath renders a blank page with no console error.
 - Env: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_BATTLE_ENGINE_URL`. An **empty** `VITE_BATTLE_ENGINE_URL` → `battleEngineConfigured()` false → Battle tab/route hidden (this is the Pages build).
-- `src/api/*` is the only Supabase layer: `supabaseClient.ts` (client + `callEdgeFunction`), `endpoints.ts` (PostgREST/RPC), `tradeEndpoints.ts`, `qrEndpoints.ts`, `feedRealtime.ts`. Keep their exported signatures stable — tests `vi.mock` these modules.
+- `src/api/*` is the only Supabase layer: `supabaseClient.ts` (client + `callEdgeFunction`), `endpoints.ts` (PostgREST/RPC), `tradeEndpoints.ts` (incl. `subscribeToTrades`), `qrEndpoints.ts`, `feedRealtime.ts`. Keep exported signatures stable — tests `vi.mock` these modules (add new exports to the mocks).
 - `src/lib/idb.ts` no-ops when IndexedDB is absent, so jsdom needs no IDB mock. Keep `jsdom` pinned `^25` with `vitest ^0.34`.
-- Pages deploy = `.github/workflows/deploy-web.yml` (lint+test+build, copies `index.html`→`404.html` for deep links). Settings → Pages **Source must be "GitHub Actions"**, and the `github-pages` environment branch policy must allow `main`. Live: https://igdaiiitd.github.io/TheFury/.
+- Pages deploy = `.github/workflows/deploy-web.yml` (lint+test+build, copies `index.html`→`404.html` for deep links). Settings → Pages **Source must be "GitHub Actions"**, and the `github-pages` environment branch policy must allow `main`. Live: https://igdaiiitd.github.io/TheFury/. `supabase-tests.yml` runs the schema + Deno tests on `supabase/**` changes.
 
-## Domain invariants (now single-sourced in SQL/EF — don't duplicate)
+## Domain invariants (single-sourced in SQL/EF — don't duplicate)
 - Level: Postgres `compute_level(xp)` (`level = 1 + xp/100`) is the only formula.
-- Cohorts: `is_cohort_valid()` / `department_of()` mirror `common/Cohort.java` (B.Tech CSE/CSAI/CSAM/CSB/CSSS/CSD/CSECON/ECE/EVE; M.Tech CSE/ECE).
-- QR tokens: signed `V1.<CORE>.<SIG>` (HMAC-SHA256, constant-time); forged/tampered → **400 before any DB lookup**; legacy bare cores resolve via `claims.token_core`. Implemented in `supabase/functions/_shared/qr.ts`.
-- Trades: `accept_trade` RPC locks the trade row + all `unique_cards` in **sorted-UUID order**, re-verifies ownership, swaps owners, appends to `unique_cards.history`; 24h TTL → 410 on expired.
-- Admin = `profiles.role = 'ADMIN'` (RLS policies + EF gates).
-- Forge never touches Postgres; battle-engine keeps match state in memory only.
+- Cohorts: `is_cohort_valid()` / `department_of()` (B.Tech CSE/CSAI/CSAM/CSB/CSSS/CSD/CSECON/ECE/EVE; M.Tech CSE/ECE).
+- QR tokens: signed `V1.<CORE>.<SIG>` (HMAC-SHA256 hex, constant-time); forged/tampered → **400 before any DB lookup**. Print-catalog cores are deterministic from the card id (`deterministicCore` in TS == `card_print_core` in SQL) and therefore **must** be signed. Unsigned 12-char codes are accepted only for admin-spawned claims (`claims.spawned_by` set). The QR image encodes the full token; `qr-catalog` JSON is `[{cardName, qrContent}]`.
+- Ownership: an UNLOCK unlock = 1 copy; UNLIMITED (basic lands) = unlimited; UNIQUE = one serialized `unique_cards` row each.
+- Starter pack (`grant_starter_pack`): Raging Goblin, Goblin Piker, Vulshok Berserker, Hill Giant, Fire Elemental, Grizzly Bears, Elvish Warrior, Trained Armodon, War Mammoth, Craw Wurm + 60-card "Red-Green Starter" deck (+25 Mountain, 25 Forest). Once per player (STARTER row in `game_log`).
+- Trades: `accept_trade` locks the trade row + all `unique_cards` in **sorted-UUID order**, re-verifies ownership, swaps owners, appends to `unique_cards.history`; 24h TTL → 410 on expired.
+- Admin = `profiles.role = 'ADMIN'` (RLS policies + EF gates). Banned players cannot claim or trade.
+- Forge never touches Postgres; battle-engine keeps match state in memory only. It accepts JWKS-signed tokens; the HS256 fallback exists only if `SUPABASE_JWT_SECRET` is set.
 
-## Battle UI (frontend, unchanged)
+## Battle UI (frontend)
 - `src/pages/battleUi.ts` is the pure, tested logic layer. Instant-speed spells are demoted outside `COMBAT_*` phases; the ActionBar confirm row appears only when ≥1 card is selected. `CostPartMana.canPay()` always returns true (engine TODO; real filtering is in `HumanPlayerController.getPlayableSAs()`).
