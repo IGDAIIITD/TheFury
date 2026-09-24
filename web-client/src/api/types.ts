@@ -95,6 +95,9 @@ export interface ApiError {
   details: DeckProblemDto[] | null
 }
 
+/** Why a scan granted nothing new (null when it did grant a copy). */
+export type ClaimNoGainReason = 'SAME_CODE' | 'MAX_COPIES' | 'UNLIMITED'
+
 export interface ClaimResult {
   card: CardDto
   unlocked: boolean
@@ -103,6 +106,11 @@ export interface ClaimResult {
   experienceAwarded: number
   token: string
   building: string | null
+  /** Copies owned after this scan (UNLOCK: 1..maxCopies; UNIQUE: 1; UNLIMITED: null). */
+  copiesOwned?: number | null
+  /** Copy cap for UNLOCK cards (one copy per distinct code); null otherwise. */
+  maxCopies?: number | null
+  reason?: ClaimNoGainReason | null
 }
 
 export interface BattleStatsDto {

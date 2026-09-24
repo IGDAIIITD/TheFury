@@ -12,8 +12,24 @@ type Outcome =
 
 function outcomeMessage(outcome: Outcome): string {
   if (outcome.kind === 'error') return outcome.message || 'Could not claim that code.'
-  if (outcome.kind === 'already') return 'Already discovered. Keep scanning!'
+  if (outcome.kind === 'already') {
+    const { card, reason, copiesOwned, maxCopies } = outcome.result
+    if (reason === 'SAME_CODE') {
+      return `You already scanned this code. Find a different ${card.forgeName} code for another copy (${copiesOwned ?? 1} of ${maxCopies ?? 4}).`
+    }
+    if (reason === 'MAX_COPIES') return `You have all ${maxCopies ?? 4} copies of ${card.forgeName}.`
+    if (reason === 'UNLIMITED') return `${card.forgeName} is always in your collection (unlimited copies).`
+    return 'Already discovered. Keep scanning!'
+  }
   return `Claimed ${outcome.result.card.forgeName}!`
+}
+
+/** "+10 XP · copy 2 of 4 · discovery #5" */
+function successDetail(result: ClaimResult): string {
+  const parts = [`+${result.experienceAwarded} XP`]
+  if (result.maxCopies && result.copiesOwned) parts.push(`copy ${result.copiesOwned} of ${result.maxCopies}`)
+  parts.push(`discovery #${result.discoveryCount}`)
+  return parts.join(' · ')
 }
 
 export default function ScanPage() {
@@ -167,7 +183,7 @@ export default function ScanPage() {
             </h3>
             <p style={{ color: 'var(--muted)' }}>
               {outcome.kind === 'success' && outcome.result.experienceAwarded > 0
-                ? `+${outcome.result.experienceAwarded} XP · discovery #${outcome.result.discoveryCount}`
+                ? successDetail(outcome.result)
                 : outcome.kind === 'error'
                   ? 'Could not claim that code.'
                   : outcomeMessage(outcome)}

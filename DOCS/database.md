@@ -19,7 +19,7 @@ rest is callable only by the service role (Edge Functions, battle engine). See [
 | `profiles` | 1:1 with `auth.users`: display name, email, cohort, role, XP, level, ban | read & update **own** presentation fields* | signup trigger, game functions, admins |
 | `cards` | card catalog (name, rarity, ownership type, set, colors, types, …): `seed.sql` + `seed_sets/*.sql` | read (anyone) | admins / seed files |
 | `formats`, `card_legalities` | STANDARD / COMMANDER rules; per-card legality | read (anyone) | admins / seed |
-| `player_unlocks` | UNLOCK cards a player owns | read own | `apply_claim` |
+| `player_unlocks` | copies of UNLOCK cards a player owns: one row per copy, `claim_id` = the code that granted it (unique per player × code; at most 4 per card, enforced in `apply_claim`) | read own | `apply_claim` |
 | `unique_cards` | serialized UNIQUE copies (`serial_number`, `history`, owner) | read own (+ cards in their pending trades) | `apply_claim`, `accept_trade`, admins |
 | `discoveries` | scan counts per player × card | read own | `apply_claim` |
 | `favorites` | favorited cards | read/insert/delete own | player |
@@ -114,6 +114,7 @@ service role (`scripts/download-card-art.ps1`).
 | 13 | `security_hardening` | privilege allow-list, profile guard, write-policy cleanup, `game_log`, trade/claim guards |
 | 14 | `starter_pack` | UNLIMITED starter creatures, `grant_starter_pack`, signup hook, backfill |
 | 15 | `app_config` | public runtime settings + realtime |
+| 16 | `multi_copy_unlocks` | up to 4 copies of an UNLOCK card, one per distinct code; one unique serial per player via scanning |
 
 **Rules for new migrations**
 

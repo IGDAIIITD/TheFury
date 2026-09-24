@@ -17,10 +17,10 @@ which verifies the signature before touching the database. Tampered tokens are r
 | | Printed catalog codes | Spawned codes |
 | --- | --- | --- |
 | Made by | `qr-catalog` export | `admin-spawn` (admin console → Spawns) |
-| Core | deterministic from the card id | random |
-| Per card | exactly one | as many as you mint |
+| Core | deterministic from the card id and copy number | random |
+| Per card | 1, or up to 4 for UNLOCK cards (`?copies=4`) | as many as you mint |
 | Extras | — | building, expiry, event |
-| Reusable? | UNLOCK: yes, every player benefits once · UNIQUE: first scan only | same rules per card type |
+| Reusable? | UNLOCK: yes, each player gets one copy per code · UNIQUE: first scan only | same rules per card type |
 | Type the 12-char core by hand? | **no**, must be scanned (the core is guessable from public data) | **yes** (random, rate-limited) |
 
 What a scan does depends on the card's ownership type; see [game-rules.md](game-rules.md#scanning-claims).
@@ -39,6 +39,17 @@ What a scan does depends on the card's ownership type; see [game-rules.md](game-
    ```
 3. The file is `[{ "cardName": "...", "qrContent": "V1...." }, ...]`. Generate one QR code per entry from
    `qrContent` (any QR generator or a label/mail-merge tool) and print the card name under it.
+
+**Multiple copies.** A player gets one copy of an UNLOCK card per *different* code they scan, up to 4. To let
+players collect full playsets, export with `?copies=4` (or 2–3):
+
+```bash
+curl … "https://prjsiywvhxqnsvsmfgxm.supabase.co/functions/v1/qr-catalog?copies=4" > qr-catalog.json
+```
+
+Each UNLOCK card then gets 4 entries `{ "cardName", "copy": 1..4, "qrContent" }`, each a different code.
+Print them separately and hide them in different places. UNLIMITED and UNIQUE cards still get one code each.
+Copy 1 is the same code as a plain export, so previously printed codes stay valid.
 
 Codes are deterministic, so re-exporting never changes existing printed codes. They stay valid as long as
 `QR_SIGNING_SECRET` isn't rotated.

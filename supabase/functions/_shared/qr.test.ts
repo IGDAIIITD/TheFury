@@ -1,5 +1,5 @@
 // deno test supabase/functions/_shared/qr.test.ts
-import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@1";
 import { deterministicCore, sign, signingSecret, verifyToken } from "./qr.ts";
 
 const SECRET = "0123456789abcdef0123456789abcdef-test-only";
@@ -7,6 +7,14 @@ const GRIZZLY_BEARS = "11111111-1111-4111-8111-111111111101";
 
 Deno.test("deterministic core matches SQL card_print_core (hosted DB value)", async () => {
   assertEquals(await deterministicCore(GRIZZLY_BEARS), "NBS8FE8VTBAA");
+});
+
+Deno.test("printed copies: copy 1 is the legacy core, copies 2-4 are distinct", async () => {
+  assertEquals(await deterministicCore(GRIZZLY_BEARS, 1), "NBS8FE8VTBAA");
+  const cores = await Promise.all([1, 2, 3, 4].map((n) => deterministicCore(GRIZZLY_BEARS, n)));
+  assertEquals(new Set(cores).size, 4);
+  assertEquals(await deterministicCore(GRIZZLY_BEARS, 3), cores[2]); // stable across runs
+  await assertRejects(() => deterministicCore(GRIZZLY_BEARS, 0));
 });
 
 Deno.test("sign → verify round-trips and is case/whitespace tolerant", async () => {

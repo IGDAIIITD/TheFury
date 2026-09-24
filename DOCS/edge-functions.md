@@ -38,12 +38,12 @@ typed by hand.
 
 | Status | Meaning |
 | --- | --- |
-| 200 | `{ card, unlocked, alreadyOwned, discoveryCount, experienceAwarded, token, building, physicalUuid }` |
+| 200 | `{ card, unlocked, alreadyOwned, reason, copiesOwned, maxCopies, discoveryCount, experienceAwarded, token, building, physicalUuid }`. `reason` is set when nothing new was granted: `SAME_CODE` (you already used this code), `MAX_COPIES` (you have 4) or `UNLIMITED` |
 | 400 | missing, forged or unknown-unsigned token |
 | 401 | not signed in |
 | 403 | account banned |
 | 404 | token not found |
-| 409 | unique card already claimed |
+| 409 | unique card already claimed, or you already own a copy of that unique card (the code isn't used up) |
 | 410 | token expired or revoked |
 | 429 | rate limited (`Retry-After` header) |
 
@@ -54,11 +54,15 @@ typed by hand.
   [{ "cardName": "Grizzly Bears", "qrContent": "V1.NBS8FE8VTBAA.9F3C…" }]
   ```
   `qrContent` is exactly what to encode in the QR image.
-- `GET /functions/v1/qr-catalog?format=csv` → `cardName,qrContent,tokenCore,ownershipType,rarity,oracleId`.
-- `POST /functions/v1/qr-catalog/regenerate` → make sure a claim row exists for every card → `{ "cards": n }`.
+- `?copies=N` (1–4, default 1): **N distinct codes for every UNLOCK card**, since a player gets one copy per
+  different code. Entries then include `"copy": 1..N`. UNLIMITED and UNIQUE cards always get one code.
+- `GET /functions/v1/qr-catalog?format=csv` → `cardName,copy,qrContent,tokenCore,ownershipType,rarity,oracleId`.
+- `POST /functions/v1/qr-catalog/regenerate` (accepts `?copies`) → make sure a claim row exists for every
+  code → `{ "codes": n }`.
 
-Tokens are **deterministic** (core = f(card id), signed with the project secret), so exporting again always
-gives the same codes, and new cards simply appear. 401/403 for non-admins.
+Tokens are **deterministic** (core = f(card id, copy), signed with the project secret), so exporting again always
+gives the same codes, and new cards simply appear. Copy 1 is the original single code per card (identical to
+SQL `card_print_core`). 400 for a bad `copies`, 401/403 for non-admins.
 
 ## `admin-spawn` (admin)
 

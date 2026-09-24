@@ -113,3 +113,35 @@ test('can scan another after a result', async () => {
   expect(await screen.findByTestId('manual-token')).toBeInTheDocument()
   expect(screen.getByTestId('manual-token')).toHaveValue('')
 })
+
+test('shows which copy a new scan granted', async () => {
+  mockedClaimToken.mockResolvedValue({ ...unlockedResult, copiesOwned: 2, maxCopies: 4, discoveryCount: 3 })
+
+  render(<ScanPage />)
+  fireEvent.change(screen.getByTestId('manual-token'), { target: { value: 'COUNTSPELL02' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Claim' }))
+
+  expect(await screen.findByText('+10 XP · copy 2 of 4 · discovery #3')).toBeInTheDocument()
+})
+
+test('explains that rescanning the same code gives no extra copy', async () => {
+  mockedClaimToken.mockResolvedValue({ ...alreadyOwnedResult, reason: 'SAME_CODE', copiesOwned: 1, maxCopies: 4 })
+
+  render(<ScanPage />)
+  fireEvent.change(screen.getByTestId('manual-token'), { target: { value: 'COUNTSPELL01' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Claim' }))
+
+  expect(
+    await screen.findByText('You already scanned this code. Find a different Counterspell code for another copy (1 of 4).'),
+  ).toBeInTheDocument()
+})
+
+test('says when all copies are collected', async () => {
+  mockedClaimToken.mockResolvedValue({ ...alreadyOwnedResult, reason: 'MAX_COPIES', copiesOwned: 4, maxCopies: 4 })
+
+  render(<ScanPage />)
+  fireEvent.change(screen.getByTestId('manual-token'), { target: { value: 'COUNTSPELL05' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Claim' }))
+
+  expect(await screen.findByText('You have all 4 copies of Counterspell.')).toBeInTheDocument()
+})

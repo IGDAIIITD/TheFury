@@ -206,6 +206,61 @@ console.log('\n# imported set: M19 (seed_sets/m19.sql)')
   check('4x an M19 common is legal without owning a scan', r.ok && r.rows[0].v.valid === true, JSON.stringify(r.rows?.[0]?.v ?? r.error))
 }
 
+console.log('\n# multi-copy unlocks: 4 different codes = 4 copies')
+{
+  const carol = await signUp(db, 'carol@campus.edu', { display_name: 'Carol' })
+  const nova = (await q(`select id from public.cards where forge_name = 'Cleansing Nova'`))[0].id
+  const cores = ['NOVACOPY0001', 'NOVACOPY0002', 'NOVACOPY0003', 'NOVACOPY0004', 'NOVACOPY0005']
+  for (const core of cores) await q(`select public.ensure_print_claim($1, $2, $3)`, [nova, core, `V1.${core}.SIG`])
+  const scan = async (core, player = carol) => as(db, 'service_role', null, `select public.apply_claim($1, $2) as res`, [core, player])
+  const copies = async (player = carol) =>
+    (await q(`select count(*)::int as n from public.player_unlocks where player_id = $1 and card_id = $2`, [player, nova]))[0].n
+
+  const results = []
+  for (const core of cores.slice(0, 4)) results.push((await scan(core)).rows?.[0]?.res)
+  check('four different codes → copies 1, 2, 3, 4', results.map((r) => r?.copiesOwned).join() === '1,2,3,4' && (await copies()) === 4,
+    JSON.stringify(results.map((r) => r && [r.unlocked, r.copiesOwned, r.reason])))
+  check('each new copy is worth 10 XP; the result reports maxCopies 4',
+    results.every((r) => r.unlocked && r.experienceAwarded === 10 && r.maxCopies === 4))
+
+  let r = await scan(cores[1])
+  check('rescanning a code you already used adds nothing (SAME_CODE)',
+    r.ok && r.rows[0].res.unlocked === false && r.rows[0].res.reason === 'SAME_CODE' && r.rows[0].res.experienceAwarded === 0 && (await copies()) === 4,
+    JSON.stringify(r.rows?.[0]?.res ?? r.error))
+  r = await scan(cores[4])
+  check('a fifth code adds nothing (MAX_COPIES)', r.ok && r.rows[0].res.reason === 'MAX_COPIES' && (await copies()) === 4,
+    JSON.stringify(r.rows?.[0]?.res ?? r.error))
+
+  r = await scan(cores[0], bob)
+  check("codes stay reusable: another player gets their own first copy", r.ok && r.rows[0].res.copiesOwned === 1 && (await copies(bob)) === 1,
+    JSON.stringify(r.rows?.[0]?.res ?? r.error))
+
+  const deck = (qty) => as(db, 'authenticated', carol, `select public.validate_deck_spec('STANDARD', null, jsonb_build_array(
+      jsonb_build_object('cardId', $1::uuid, 'quantity', ${qty}),
+      jsonb_build_object('cardId', (select id from public.cards where forge_name = 'Plains'), 'quantity', ${60 - qty}))) as v`, [nova])
+  r = await deck(4)
+  check('4 owned copies → 4 in a deck is legal', r.ok && r.rows[0].v.valid === true, JSON.stringify(r.rows?.[0]?.v ?? r.error))
+  r = await as(db, 'authenticated', bob, `select public.validate_deck_spec('STANDARD', null, jsonb_build_array(
+      jsonb_build_object('cardId', $1::uuid, 'quantity', 2),
+      jsonb_build_object('cardId', (select id from public.cards where forge_name = 'Plains'), 'quantity', 58))) as v`, [nova])
+  check('1 owned copy → 2 in a deck is rejected (NOT_ENOUGH_COPIES)',
+    r.ok && r.rows[0].v.problems.some((p) => p.code === 'NOT_ENOUGH_COPIES'), JSON.stringify(r.rows?.[0]?.v))
+
+  const log = await q(`select detail->>'reason' as reason, xp from public.game_log where kind = 'CLAIM' and player_id = $1 order by id`, [carol])
+  check('every scan is logged with its outcome', log.length === 6 && log.filter((x) => Number(x.xp) === 10).length === 4, JSON.stringify(log))
+
+  // unique cards: one serial per player via scanning, and the code isn't burned
+  const bolas = (await q(`select id from public.cards where forge_name = 'Nicol Bolas, the Ravager'`))[0].id
+  await q(`select public.ensure_print_claim($1, 'BOLASCOPY002', 'V1.BOLASCOPY002.SIG')`, [bolas])
+  r = await scan('BOLASCOPY002', alice) // alice already holds serial #1 (M19 section)
+  const status = (await q(`select status from public.claims where token_core = 'BOLASCOPY002'`))[0].status
+  check('owning a unique card blocks claiming a 2nd serial, without consuming the code',
+    !r.ok && r.code === 'CF409' && status === 'ACTIVE', JSON.stringify([r.error, status]))
+  r = await scan('BOLASCOPY002', bob)
+  check('…so another player can still claim it (serial #2)', r.ok && r.rows[0].res.unlocked === true,
+    JSON.stringify(r.rows?.[0]?.res ?? r.error))
+}
+
 console.log('\n# battle-engine RPCs (service role)')
 {
   const bobDeck = (await q(`select id from public.decks where player_id = $1 limit 1`, [bob]))[0]?.id

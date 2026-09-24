@@ -40,11 +40,19 @@ function toHexUpper(bytes: ArrayBuffer): string {
     .toUpperCase();
 }
 
-/** Deterministic token core for a card id. Mirrors ClaimService.deterministicCore. */
-export async function deterministicCore(cardId: string): Promise<string> {
+/**
+ * Deterministic token core for printed copy `copy` (1-based) of a card.
+ * Copy 1 = SHA-256("cf-print:<cardId>"), identical to SQL card_print_core, so
+ * codes printed before multi-copy support stay valid. Copies 2..n hash
+ * "cf-print:<cardId>:<copy>", giving each printed copy its own code (a player
+ * gets one card copy per distinct code, up to 4).
+ */
+export async function deterministicCore(cardId: string, copy = 1): Promise<string> {
+  if (!Number.isInteger(copy) || copy < 1) throw new Error(`invalid copy number ${copy}`);
+  const seed = copy === 1 ? `cf-print:${cardId}` : `cf-print:${cardId}:${copy}`;
   const enc = new TextEncoder();
   const digest = new Uint8Array(
-    await crypto.subtle.digest("SHA-256", enc.encode(`cf-print:${cardId}`)),
+    await crypto.subtle.digest("SHA-256", enc.encode(seed)),
   );
   let v =
     (BigInt(digest[0] ?? 0) << 40n) |
