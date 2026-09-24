@@ -11,7 +11,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -34,8 +33,10 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * Validates Supabase Auth access-token JWTs. Access tokens are signed with the
  * project's signing key published via JWKS ({@code /auth/v1/.well-known/jwks.json}),
- * so verification uses a key locator keyed by {@code kid}. A HS256 shared-secret
- * fallback is kept for local/demo setups that sign tokens with GOTRUE_JWT_SECRET.
+ * so verification uses a key locator keyed by {@code kid}; an unknown kid triggers
+ * a (rate-limited) JWKS refresh so signing-key rotation just works. The HS256
+ * shared-secret fallback is only enabled when {@code SUPABASE_JWT_SECRET} is set
+ * (legacy-secret projects / local CLI); with no secret, only JWKS keys verify.
  */
 @Component
 public class SupabaseJwt {
@@ -52,16 +53,22 @@ public class SupabaseJwt {
             .connectTimeout(Duration.ofSeconds(10))
             .build();
     private final AtomicReference<Map<String, Key>> jwks = new AtomicReference<>(Map.of());
+    private volatile long lastRefreshMs = 0;
+    private static final long MIN_REFRESH_INTERVAL_MS = 60_000;
 
     public SupabaseJwt(@Value("${supabase.url}") String baseUrl,
                        @Value("${supabase.jwt-secret}") String jwtSecret) {
         String b = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
         this.jwksUrl = b + "/auth/v1/.well-known/jwks.json";
-        this.hsSecret = jwtSecret;
+        this.hsSecret = jwtSecret == null ? "" : jwtSecret.trim();
+        if (!this.hsSecret.isEmpty() && this.hsSecret.length() < 32) {
+            throw new IllegalStateException("SUPABASE_JWT_SECRET must be at least 32 characters");
+        }
         refreshJwks();
     }
 
-    private void refreshJwks() {
+    private synchronized void refreshJwks() {
+        lastRefreshMs = System.currentTimeMillis();
         try {
             HttpRequest req = HttpRequest.newBuilder(URI.create(jwksUrl))
                     .header("Accept", "application/json")
@@ -181,8 +188,18 @@ public class SupabaseJwt {
         if (kid != null && keys.containsKey(kid)) {
             return keys.get(kid);
         }
-        // fall back to the shared-secret key for HS256 local/demo tokens
-        SecretKey hsKey = new SecretKeySpec(hsSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA256");
-        return hsKey;
+        if (kid != null && System.currentTimeMillis() - lastRefreshMs > MIN_REFRESH_INTERVAL_MS) {
+            refreshJwks(); // possibly a rotated signing key
+            Key rotated = jwks.get().get(kid);
+            if (rotated != null) {
+                return rotated;
+            }
+        }
+        String alg = header != null ? (String) header.get("alg") : null;
+        if (hsSecret.isEmpty() || !"HS256".equals(alg)) {
+            throw new JwtException("No verification key for kid=" + kid + " alg=" + alg);
+        }
+        // legacy shared-secret (HS256) tokens, only when a secret is configured
+        return new SecretKeySpec(hsSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA256");
     }
 }
