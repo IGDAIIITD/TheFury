@@ -43,7 +43,7 @@ export function battleRestBase(): string {
   return origin ? `${origin}/api/v1` : '/api/v1'
 }
 
-/** STOMP/SockJS endpoint for a given origin. */
+/** Native WebSocket STOMP endpoint (ws:// or wss://) for the engine origin. */
 export function battleWsUrl(): string {
   const origin = battleEngineOrigin()
   const base = origin ? origin : window.location.origin

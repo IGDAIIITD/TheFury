@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import { Client } from '@stomp/stompjs'
-import SockJS from 'sockjs-client'
 import {
   createMatch,
   createLobby,
@@ -299,7 +298,8 @@ export default function BattlePage() {
       if (!wsToken) return
 
       const client = new Client({
-        webSocketFactory: () => new SockJS(battleWsUrl()),
+        // native WebSocket (ws:// or wss://); the engine's plain STOMP endpoint
+        brokerURL: battleWsUrl(),
         connectHeaders: { Authorization: `Bearer ${wsToken}` },
         reconnectDelay: 5000,
         onConnect: () => {

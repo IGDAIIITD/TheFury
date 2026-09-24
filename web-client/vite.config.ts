@@ -1,4 +1,6 @@
-import { defineConfig } from 'vite'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
@@ -6,10 +8,46 @@ import { VitePWA } from 'vite-plugin-pwa'
 // sets BASE_PATH=/TheFury/. Local dev/preview keep '/'.
 const base = process.env.BASE_PATH || '/'
 
+/**
+ * GitHub Pages has no SPA rewrites: a deep link such as /TheFury/leaderboard
+ * only rendered via the 404.html copy of the app, i.e. with an HTTP 404 (logged
+ * in the console, and hit by every hard reload and by the PWA start_url). Emit
+ * the app shell at every static route instead (`leaderboard.html` +
+ * `leaderboard/index.html`) so those URLs are real 200 pages. Routes are read
+ * from App.tsx so the list cannot drift; 404.html stays as the fallback for
+ * anything else.
+ */
+function staticRouteShells(): Plugin {
+  let outDir = 'dist'
+  return {
+    name: 'campusforge-static-route-shells',
+    apply: 'build',
+    configResolved(config) {
+      outDir = config.build.outDir
+    },
+    closeBundle() {
+      const app = readFileSync(join(__dirname, 'src/App.tsx'), 'utf8')
+      const routes = [...app.matchAll(/<Route\s+path="(\/[^"]+)"/g)]
+        .map((m) => m[1].replace(/^\/+|\/+$/g, ''))
+        .filter((r) => r && !/[:*]/.test(r))
+      const shell = readFileSync(join(outDir, 'index.html'), 'utf8')
+      for (const route of routes) {
+        for (const file of [`${route}.html`, `${route}/index.html`]) {
+          const target = join(outDir, file)
+          mkdirSync(dirname(target), { recursive: true })
+          writeFileSync(target, shell)
+        }
+      }
+      console.log(`static route shells: ${routes.join(', ')}`)
+    },
+  }
+}
+
 export default defineConfig({
   base,
   plugins: [
     react(),
+    staticRouteShells(),
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['icons/icon-192.png', 'icons/icon-512.png'],
@@ -29,43 +67,13 @@ export default defineConfig({
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,ico}'],
         navigateFallback: 'index.html',
-        navigateFallbackDenylist: [/^\/api\//, /^\/ws\//],
-        runtimeCaching: [
-          {
-            urlPattern: /^\/api\/.*/,
-            handler: 'NetworkFirst',
-            options: {
-              cacheName: 'campus-forge-api',
-              networkTimeoutSeconds: 5,
-              expiration: {
-                maxEntries: 100,
-                maxAgeSeconds: 60 * 60 * 24,
-              },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
-        ],
       },
       devOptions: { enabled: false },
     }),
   ],
   server: {
+    // Supabase and the battle engine are called cross-origin; no dev proxy.
     port: 17170,
-    proxy: {
-      '/api': {
-        target: 'http://localhost:17172',
-        changeOrigin: true,
-      },
-      '/card-art': {
-        target: 'http://localhost:17172',
-        changeOrigin: true,
-      },
-      '/ws': {
-        target: 'http://localhost:17172',
-        ws: true,
-        changeOrigin: true,
-      },
-    },
   },
   test: {
     environment: 'jsdom',
