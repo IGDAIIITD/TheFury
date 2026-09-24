@@ -39,8 +39,8 @@ jobs:
           # Public by design (ship in the JS bundle); RLS is the security boundary.
           VITE_SUPABASE_URL: https://prjsiywvhxqnsvsmfgxm.supabase.co
           VITE_SUPABASE_ANON_KEY: sb_publishable_CI-gegnlyhVoOfHr-1SEmw__J_BDZZ6
-          # Empty = no battle engine; the Battle tab/route is hidden. To enable battles set
-          # the Tailscale Funnel URL, e.g. 'https://<machine>.<tailnet>.ts.net' (battle-engine/README.md section 6).
+          # Empty = discover the engine at runtime from Supabase app_config.battle_engine_url
+          # (published by battle-engine/start-public.ps1). Set a URL here only to pin one.
           VITE_BATTLE_ENGINE_URL: ''
         run: npm run build
 

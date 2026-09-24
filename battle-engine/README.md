@@ -12,8 +12,9 @@ over REST (`/api/v1/battle/*`) and STOMP/SockJS (`/ws/match`).
   the service-only RPCs `validate_deck` (at match start) and `record_match_result`
   (awards the winner 50 XP × event bonus and writes `game_log`).
 
-The GitHub Pages build ships with battles **hidden** (`VITE_BATTLE_ENGINE_URL` empty).
-Everything below is what it takes to turn them on.
+The GitHub Pages build has no engine URL baked in. It discovers the engine at runtime
+from Supabase `app_config.battle_engine_url` (section 6), and the Battle tab only shows
+while an engine is published and answering.
 
 ## 1. Prerequisites
 
@@ -107,108 +108,95 @@ Every new account has a legal 60-card **Red-Green Starter** deck (migration 14),
 freshly registered players can battle each other right away: one creates a lobby, the
 other joins with the battle code.
 
-## 6. Production: battles on the GitHub Pages site (Tailscale Funnel)
+## 6. Production: battles on the GitHub Pages site (Cloudflare quick tunnel)
 
-### Why Funnel, and not this PC's "static IP"
+### Why a tunnel, and not this PC's "static IP"
 
 This PC's fixed address, `192.168.194.106`, is a **private campus LAN address**. The
 internet sees it as `103.25.231.106`, the campus NAT address shared with other
 machines, so nothing off campus can reach port 17175. The Pages site is also HTTPS,
 so browsers refuse a plain `http://` engine (mixed content).
 
-[Tailscale Funnel](https://tailscale.com/kb/1223/funnel) solves both, and it needs
-**no domain**. The Tailscale client makes an outbound connection, and Tailscale then
-publishes `https://<machine>.<tailnet>.ts.net` with a real certificate. Requests and
-WebSockets are forwarded to `localhost:17175`. The address is permanent, it's free on
-the Personal plan, and no ports or firewall changes are needed. Outbound 443 to
-Tailscale was tested and works from this network.
+A Cloudflare **quick tunnel** fixes both, with **no account and no domain**.
+`cloudflared` makes an outbound connection (TCP 7844, verified open from this
+network), and Cloudflare serves `https://<random-words>.trycloudflare.com` with a
+valid certificate, forwarding requests and WebSockets to `localhost:17175`.
 
-### Step 1: install Tailscale and sign in
+The random URL changes every time the tunnel starts, so the site doesn't bake it in.
+`start-public.ps1` publishes the current URL to the Supabase table
+`app_config.battle_engine_url`. The PWA reads it on load, checks the engine answers,
+and follows live updates. The Battle tab appears when the engine is up and
+disappears when it stops. **The website never needs a rebuild.**
+
+### Step 1: install cloudflared (once)
 
 ```powershell
-winget install --id Tailscale.Tailscale
+winget install --id Cloudflare.cloudflared
 ```
 
-Open Tailscale from the Start menu and **Log in** (Google, Microsoft or GitHub
-account). In the tray icon menu, enable **Preferences → Run unattended**, so Tailscale
-keeps running when nobody is logged in to Windows (e.g. after a reboot).
-
-Optional: rename the machine at https://login.tailscale.com/admin/machines
-(⋯ → Edit machine name, e.g. `campusforge`). The name becomes part of the URL.
-
-### Step 2: build and start the engine
+### Step 2: build the engine (once, and after code changes)
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File battle-engine/setup-forge.ps1 -Mvn "C:\Users\student\AppData\Local\Temp\opencode\apache-maven-3.9.9\bin\mvn.cmd"
 cd battle-engine; mvn clean package; cd ..
-powershell -ExecutionPolicy Bypass -File battle-engine/run-engine.ps1
 ```
 
-`run-engine.ps1` reads `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` from the repo
-`.env` and allows CORS from `https://igdaiiitd.github.io` plus localhost. Leave it
-running. In another terminal, `curl.exe -i http://localhost:17175/api/v1/battle/matches`
-must return `401`.
-
-### Step 3: publish it with Funnel
-
-In a terminal (run as Administrator if it complains about permissions):
+### Step 3: go live
 
 ```powershell
-tailscale funnel --bg 17175
+powershell -ExecutionPolicy Bypass -File battle-engine/start-public.ps1
 ```
 
-- The first time, it prints a `login.tailscale.com` link to **enable HTTPS
-  certificates and Funnel** for your tailnet. Open it, approve, and run the command
-  again.
-- `--bg` makes it persistent: it survives reboots and Tailscale restarts.
-- `tailscale funnel status` shows the public URL, e.g.
-  `https://campusforge.tail1234.ts.net`. It is proxied to `http://127.0.0.1:17175`.
-- The first certificate and DNS setup can take a few minutes.
+It starts the engine (settings from the repo `.env`), starts the tunnel, waits until
+the engine answers through the public URL, publishes the URL, and keeps watching:
 
-Verify from **another network** (e.g. your phone on mobile data):
-`https://<machine>.<tailnet>.ts.net/api/v1/battle/matches` → `401` means it works.
+```
+[14:02:10] Starting battle engine on http://localhost:17175 (log: ...\logs\engine.log)
+[14:02:19] Engine is up
+[14:02:19] Starting Cloudflare quick tunnel (log: ...\logs\cloudflared.log)
+[14:02:24] Tunnel URL: https://example-words-here.trycloudflare.com
+[14:02:31] Published to Supabase app_config.battle_engine_url
+[14:02:31] Battles are live on the Pages site. Press Ctrl+C to stop.
+```
 
-To stop publishing: `tailscale funnel --https=443 off` (or `tailscale funnel reset`).
+**Ctrl+C** (or either process dying, or the tunnel being unreachable for a minute)
+clears the URL, which hides the Battle tab, and stops both processes. Open tabs pick
+up a new URL within seconds; others get it on their next page load.
 
-### Step 4: keep the engine running across reboots
+### Step 4 (optional): start automatically at boot
 
-Tailscale is already a service (and Funnel is persistent). For the engine, run this in
-an **Administrator** PowerShell:
+Run once in an **Administrator** PowerShell:
 
 ```powershell
-schtasks /Create /TN "CampusForge Battle Engine" /SC ONSTART /RU SYSTEM /RL HIGHEST /TR "powershell -NoProfile -ExecutionPolicy Bypass -File \"C:\Users\student\Desktop\thingamamagicthegathering\2026-08-02 mtgoffline\battle-engine\run-engine.ps1\""
-schtasks /Run /TN "CampusForge Battle Engine"
+schtasks /Create /TN "CampusForge Battles" /SC ONSTART /DELAY 0001:00 /RU SYSTEM /RL HIGHEST /TR "powershell -NoProfile -ExecutionPolicy Bypass -File \"C:\Users\student\Desktop\thingamamagicthegathering\2026-08-02 mtgoffline\battle-engine\start-public.ps1\""
+schtasks /Run /TN "CampusForge Battles"
+powercfg /change standby-timeout-ac 0
 ```
 
-Also stop the PC from sleeping: `powercfg /change standby-timeout-ac 0`.
-If the repo moves, recreate the task with the new path. To stop the engine:
-`schtasks /End /TN "CampusForge Battle Engine"`.
+Stop with `schtasks /End /TN "CampusForge Battles"`. The script exits when the engine
+or tunnel dies. For automatic restarts, open Task Scheduler → the task → Settings →
+"If the task fails, restart every 1 minute".
 
-### Step 5: point the website at the engine
+### Step 5: end-to-end check
 
-In `.github/workflows/deploy-web.yml` set
-
-```yaml
-          VITE_BATTLE_ENGINE_URL: 'https://<machine>.<tailnet>.ts.net'
-```
-
-(no trailing slash), then commit and push to `main`. Once the Pages deploy finishes,
-the Battle tab appears on https://igdaiiitd.github.io/TheFury/. The URL is baked in at
-build time; it only changes if you rename the machine or tailnet.
-
-### Step 6: end-to-end check
-
-Register two accounts (two browsers, or phone + laptop). Each already has the
+Open https://igdaiiitd.github.io/TheFury/ on your phone (mobile data works too) and sign
+in. The Battle tab should be there. Register two accounts. Each already has the
 **Red-Green Starter** deck. Player A: Battle → create lobby → share the code.
 Player B: join with the code. When the game ends, the winner gets 50 XP, a
 `game_log` MATCH row is written for each player, and the match shows in both profiles.
 
-**Notes.** Funnel traffic is relayed through Tailscale's servers, and Tailscale doesn't
-publish bandwidth limits for it. Battle traffic is small JSON, so it's plenty for a campus game. If you ever
-want a URL under your own domain, a named Cloudflare Tunnel works the same way
-(`cloudflared` → `localhost:17175`). For a no-account throwaway test there's also
-`cloudflared tunnel --url http://localhost:17175`, which prints a temporary
-`*.trycloudflare.com` URL.
+### Limits and alternatives
+
+- Cloudflare treats quick tunnels as a testing feature: no uptime guarantee, and a
+  cap of about 200 in-flight requests. That's fine for a campus game. A tunnel restart means a
+  new URL, which the script handles, but it drops in-progress matches (as any engine
+  restart does).
+- For a permanent URL later: a **named Cloudflare Tunnel** (needs a domain on
+  Cloudflare) or **Tailscale Funnel** (`tailscale funnel --bg 17175`, gives
+  `https://<machine>.<tailnet>.ts.net`, no domain). With either, put the URL in
+  `VITE_BATTLE_ENGINE_URL` in `deploy-web.yml`, or run
+  `update public.app_config set value = '<url>' where key = 'battle_engine_url';`
+  without a rebuild.
 
 ## 7. Troubleshooting
 
@@ -220,7 +208,7 @@ want a URL under your own domain, a named Cloudflare Tunnel works the same way
 | `Filename too long` while cloning | Windows path limit; the script already sets `core.longpaths` and a sparse checkout; keep the repo path short. |
 | Every call returns 401 | Token not from this project, expired, or the engine could not reach `SUPABASE_URL` for JWKS at startup (check the `Loaded N JWKS keys` line). |
 | Browser: CORS error | Add the exact page origin to `CAMPUSFORGE_CORS_ALLOWED_ORIGINS` and restart. |
-| Funnel URL times out / 502 | Engine not running on `localhost:17175` (step 4), Funnel off (`tailscale funnel status`), or Tailscale logged out. First-time certificate issuance can take a few minutes. |
-| Works on campus Wi-Fi, not outside | You tested the `100.x` tailnet IP or the machine name; use the full `https://….ts.net` Funnel URL. |
+| Battle tab never appears on Pages | `start-public.ps1` not running / failed (check `battle-engine/logs/`), or `app_config.battle_engine_url` is empty. The site only shows the tab if the URL answers `/api/v1/battle/features`. |
+| cloudflared: "failed to request quick Tunnel" | Cloudflare rate-limits quick tunnels; wait a minute and re-run. |
 | "Deck not valid" when starting a match | `validate_deck` rejected it (not owned, too many copies, < 60 cards...). The message names the first problem. |
 | Battle tab missing | `VITE_BATTLE_ENGINE_URL` was empty at build time. It is baked into the bundle; rebuild after changing it. |

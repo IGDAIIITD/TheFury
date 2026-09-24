@@ -31,7 +31,8 @@ and battle each other with real Magic rules.
 - **History:** `game_log` is the durable, append-only record of every claim, trade,
   match result, starter grant and admin spawn (players read their own rows; admins all).
   `activity_feed` is the 50-row live ticker shown on the Events page.
-- **Realtime:** `activity_feed` and `trades` are published; RLS applies to subscribers.
+- **Realtime:** `activity_feed`, `trades` and `app_config` (public runtime settings, e.g. the
+  current battle engine URL) are published; RLS applies to subscribers.
 - **Starter cards:** 5 red + 5 green attacking creatures are UNLIMITED like basic lands (everyone
   owns infinite copies; Standard still allows 4 per deck), and every new account gets a
   ready 60-card "Red-Green Starter" deck (4x each + 10 Mountain + 10 Forest).
@@ -78,5 +79,7 @@ Apply these once per environment (the hosted DB was bootstrapped from
    typed in manually on the Scan page.
 7. **Frontend.** Push to `main`; `.github/workflows/deploy-web.yml` lints, tests, builds
    and deploys to Pages.
-8. **Battles (optional).** Follow [battle-engine/README.md](battle-engine/README.md),
-   then set `VITE_BATTLE_ENGINE_URL` in `deploy-web.yml`.
+8. **Battles (optional).** Build the engine once, then run
+   `battle-engine/start-public.ps1` on the host PC. It opens a Cloudflare quick tunnel and
+   publishes the URL to Supabase `app_config`; the site picks it up without a rebuild.
+   See [battle-engine/README.md](battle-engine/README.md).
