@@ -138,7 +138,7 @@ console.log('\n# trades')
   const tl = await q(`select count(*)::int as n from public.game_log where kind = 'TRADE' and ref_id = $1`, [tradeId])
   check('trade logged for both parties', tl[0].n === 2)
   const pub = await q(`select tablename from pg_publication_tables where pubname = 'supabase_realtime' order by 1`)
-  check('realtime publishes activity_feed + trades', pub.map((x) => x.tablename).join() === 'activity_feed,trades', JSON.stringify(pub))
+  check('realtime publishes activity_feed + app_config + trades', pub.map((x) => x.tablename).join() === 'activity_feed,app_config,trades', JSON.stringify(pub))
 }
 
 console.log('\n# stats / analytics')
@@ -153,6 +153,21 @@ console.log('\n# stats / analytics')
   check('anon cannot read the feed', r.ok && r.rows[0].n === 0, JSON.stringify(r))
   r = await as(db, 'authenticated', bob, `select count(*)::int as n from public.activity_feed`)
   check('signed-in players read the feed', r.ok && r.rows[0].n > 0, JSON.stringify(r))
+}
+
+console.log('\n# app_config (public runtime settings)')
+{
+  const KEY = `key = 'battle_engine_url'`
+  let r = await as(db, 'anon', null, `select value from public.app_config where ${KEY}`)
+  check('anon can read the battle engine URL row', r.ok && r.rows.length === 1, JSON.stringify(r))
+  r = await as(db, 'anon', null, `update public.app_config set value = 'https://evil.example' where ${KEY}`)
+  check('anon cannot change it', !r.ok || r.affected === 0, JSON.stringify(r))
+  r = await as(db, 'authenticated', alice, `update public.app_config set value = 'https://evil.example' where ${KEY}`)
+  check('players cannot change it', r.ok && r.affected === 0, JSON.stringify(r))
+  r = await as(db, 'service_role', null, `insert into public.app_config (key, value) values ('battle_engine_url', 'https://a-b-c.trycloudflare.com') on conflict (key) do update set value = excluded.value returning value`)
+  check('service role (start-public.ps1) can publish the URL', r.ok && r.rows[0].value === 'https://a-b-c.trycloudflare.com', JSON.stringify(r))
+  r = await as(db, 'authenticated', admin, `update public.app_config set value = null where ${KEY} returning value`)
+  check('admins can clear it', r.ok && r.rows[0].value === null, JSON.stringify(r))
 }
 
 console.log('\n# battle-engine RPCs (service role)')

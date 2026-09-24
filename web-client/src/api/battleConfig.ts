@@ -5,11 +5,26 @@
  * (`/api/v1/battle/*`) and STOMP WS (`/ws/match`) are authenticated with a
  * Supabase access-token JWT (not the legacy backend `cf_token`).
  *
- * `VITE_BATTLE_ENGINE_URL` is the engine origin (defaults to same-origin via the
- * dev proxy so no engine URL is needed for local `npm run dev`).
+ * The engine origin is `VITE_BATTLE_ENGINE_URL` when set at build time (local
+ * dev), otherwise the URL published in Supabase `app_config` and discovered at
+ * startup (GitHub Pages + a Cloudflare quick tunnel whose URL changes).
  */
+
+let runtimeOrigin = ''
+
+/**
+ * Engine origin discovered at runtime (see `battleEngineDiscovery.ts`): the
+ * Pages build ships without a URL and reads the current tunnel URL from the
+ * Supabase `app_config` table. Pass '' to clear.
+ */
+export function setRuntimeBattleEngineOrigin(origin: string): void {
+  runtimeOrigin = origin.trim().replace(/\/+$/, '')
+}
+
+/** A build-time `VITE_BATTLE_ENGINE_URL` wins (local dev); otherwise the runtime one. */
 export function battleEngineOrigin(): string {
-  return (import.meta.env.VITE_BATTLE_ENGINE_URL ?? '').replace(/\/+$/, '')
+  const buildTime = (import.meta.env.VITE_BATTLE_ENGINE_URL ?? '').replace(/\/+$/, '')
+  return buildTime || runtimeOrigin
 }
 
 /**

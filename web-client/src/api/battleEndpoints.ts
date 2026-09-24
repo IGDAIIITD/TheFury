@@ -2,9 +2,11 @@ import axios from 'axios'
 import { battleRestBase, battleToken } from './battleConfig'
 import type { BattleFeatures, MatchDto, MatchState } from './battleTypes'
 
-const battleApi = axios.create({ baseURL: battleRestBase() })
+const battleApi = axios.create()
 
 battleApi.interceptors.request.use(async (config) => {
+  // resolved per request: the engine URL can be discovered (or change) after load
+  config.baseURL = battleRestBase()
   const token = await battleToken()
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
