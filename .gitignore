@@ -35,3 +35,5 @@ supabase/.env
 .env.*.local
 web-client/.env.local
 web-client/.env.production
+# Forge fork checkout (recreate with battle-engine/setup-forge.ps1)
+/forge-engine/

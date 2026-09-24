@@ -1,0 +1,107 @@
+diff --git a/forge-game/src/main/java/forge/game/ForgeDebug.java b/forge-game/src/main/java/forge/game/ForgeDebug.java
+new file mode 100644
+index 0000000000..82c75a1376
+--- /dev/null
++++ b/forge-game/src/main/java/forge/game/ForgeDebug.java
+@@ -0,0 +1,16 @@
++package forge.game;
++
++/**
++ * Master switch for noisy engine debug traces. All {@code [HPC]}, {@code [PSA]}
++ * and {@code [payManaCost]} log lines are gated behind
++ * {@code -Dforge.debug.traces=true} (off by default).
++ */
++public final class ForgeDebug {
++
++    private ForgeDebug() {
++    }
++
++    public static boolean traces() {
++        return Boolean.getBoolean("forge.debug.traces");
++    }
++}
+diff --git a/forge-game/src/main/java/forge/game/GameAction.java b/forge-game/src/main/java/forge/game/GameAction.java
+index 0fb38dab0d..d76ee32f92 100644
+--- a/forge-game/src/main/java/forge/game/GameAction.java
++++ b/forge-game/src/main/java/forge/game/GameAction.java
+@@ -2416,7 +2416,10 @@ public class GameAction {
+         boolean isFirstGame = lastGameOutcome == null;
+         if (isFirstGame) {
+             game.fireEvent(new GameEventFlipCoin()); // Play the Flip Coin sound
+-            goesFirst = Aggregates.random(game.getPlayers());
++            int chooserIdx = game.getRules().getStartingPlayerChooserIndex();
++            goesFirst = chooserIdx >= 0 && chooserIdx < game.getPlayers().size()
++                    ? game.getPlayers().get(chooserIdx)
++                    : Aggregates.random(game.getPlayers());
+         } else {
+             for (Player p : game.getPlayers()) {
+                 if (!lastGameOutcome.isWinner(p.getRegisteredPlayer())) {
+diff --git a/forge-game/src/main/java/forge/game/GameRules.java b/forge-game/src/main/java/forge/game/GameRules.java
+index 6ed988583e..664deb66e5 100644
+--- a/forge-game/src/main/java/forge/game/GameRules.java
++++ b/forge-game/src/main/java/forge/game/GameRules.java
+@@ -19,6 +19,10 @@ public class GameRules {
+     private final Set<GameType> appliedVariants = EnumSet.noneOf(GameType.class);
+     private int simTimeout = 120;
+ 
++    // Which player's controller is asked who goes first in the first game of a match.
++    // -1 (default) = random player is asked (original Forge behavior).
++    private int startingPlayerChooserIndex = -1;
++
+     // it's a preference, not rule... but I could hardly find a better place for it
+     private boolean useGrayText;
+ 
+@@ -54,6 +58,13 @@ public class GameRules {
+         this.poisonCountersToLose = amount;
+     }
+ 
++    public int getStartingPlayerChooserIndex() {
++        return startingPlayerChooserIndex;
++    }
++    public void setStartingPlayerChooserIndex(final int index) {
++        this.startingPlayerChooserIndex = index;
++    }
++
+     public int getGamesPerMatch() {
+         return gamesPerMatch;
+     }
+diff --git a/forge-gui/res/cardsfolder/c/cudgel_troll.txt b/forge-gui/res/cardsfolder/c/cudgel_troll.txt
+index 91238cf0c0..e257adf863 100644
+--- a/forge-gui/res/cardsfolder/c/cudgel_troll.txt
++++ b/forge-gui/res/cardsfolder/c/cudgel_troll.txt
+@@ -2,5 +2,5 @@ Name:Cudgel Troll
+ ManaCost:2 G G
+ Types:Creature Troll
+ PT:4/3
+-A:AB$ Regenerate | Cost$ G | SpellDescription$ Regenerate CARDNAME. (The next time this creature would be destroyed this turn, instead tap it, remove it from combat, and heal all damage on it.)
++A:AB$ Regenerate | Cost$ G | ActivationPhases$ Declare Blockers,Combat Damage | SpellDescription$ Regenerate CARDNAME. (The next time this creature would be destroyed this turn, instead tap it, remove it from combat, and heal all damage on it.)
+ Oracle:{G}: Regenerate Cudgel Troll. (The next time this creature would be destroyed this turn, instead tap it, remove it from combat, and heal all damage on it.)
+diff --git a/pom.xml b/pom.xml
+index 64fde6e6a1..2ecd790237 100644
+--- a/pom.xml
++++ b/pom.xml
+@@ -65,14 +65,7 @@
+         <module>forge-core</module>
+         <module>forge-game</module>
+         <module>forge-ai</module>
+-        <module>forge-gui</module>
+-        <module>forge-gui-mobile</module>
+-        <module>forge-gui-mobile-dev</module>
+-        <module>forge-gui-desktop</module>
+-        <module>forge-lda</module>
+-        <module>adventure-editor</module>
+-        <module>forge-gui-android</module>
+-        <module>forge-installer</module>
++        <module>forge-headless</module>
+     </modules>
+ 
+     <distributionManagement>
+@@ -341,7 +334,7 @@
+                 <executions>
+                     <execution>
+                         <id>flatten</id>
+-                        <phase>deploy</phase>
++                        <phase>process-resources</phase>
+                         <goals>
+                             <goal>flatten</goal>
+                         </goals>

@@ -1,0 +1,2 @@
+# Applied with git apply against an LF checkout; keep byte-exact.
+*.patch -text
