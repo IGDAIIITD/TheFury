@@ -188,6 +188,32 @@ export function isInCombatPhase(phase: string | null | undefined): boolean {
   return !!phase && INSTANT_ALLOWED_PHASES.has(phase)
 }
 
+export type ManaSymbol =
+  | { kind: 'generic'; amount: number }
+  | { kind: 'color'; color: ManaColor }
+  | { kind: 'other'; text: string }
+
+/**
+ * "{2}{G}{G}" -> generic 2, G, G (one entry per colored pip, for the cost overlay on cards).
+ * X, hybrid and phyrexian symbols come back as 'other' with their text.
+ */
+export function manaCostSymbols(cost: string | null | undefined): ManaSymbol[] {
+  if (!cost) return []
+  const out: ManaSymbol[] = []
+  for (const m of cost.matchAll(/\{([^}]+)\}/g)) {
+    const sym = m[1].toUpperCase()
+    if (/^\d+$/.test(sym)) {
+      const amount = parseInt(sym, 10)
+      if (amount > 0) out.push({ kind: 'generic', amount })
+    } else if ((MANA_COLORS as readonly string[]).includes(sym)) {
+      out.push({ kind: 'color', color: sym as ManaColor })
+    } else {
+      out.push({ kind: 'other', text: sym })
+    }
+  }
+  return out
+}
+
 /** Human-readable mana cost description for title tooltips. */
 export function describeManaCost(cost: string | null | undefined): string {
   if (!cost) return ''
@@ -410,7 +436,23 @@ export function matchOptionToCard(
   return basic('none', [])
 }
 
-/** Maps every option of a pending choice onto cards. */
+/** Where a card with this id sits, from the player's point of view. */
+function zoneOf(
+  id: number,
+  pools: { hand: CardEntry[]; battlefield: CardEntry[]; opponent: CardEntry[] },
+): MatchZone {
+  if (pools.hand.some((c) => c.id === id)) return 'hand'
+  if (pools.battlefield.some((c) => c.id === id)) return 'battlefield'
+  if (pools.opponent.some((c) => c.id === id)) return 'opponent'
+  return 'none'
+}
+
+/**
+ * Maps every option of a pending choice onto cards. Engines that send `cardId` per option
+ * map exactly (two identical "Elvish Warrior"s are two options, two cards). Without it the
+ * card is found by name, and options with the same name each get their own card, in order,
+ * instead of the first option claiming every copy.
+ */
 export function matchOptionsToCards(
   choice: PendingChoice,
   pools: { hand: CardEntry[]; battlefield: CardEntry[]; opponent: CardEntry[] },
@@ -418,16 +460,42 @@ export function matchOptionsToCards(
 ): OptionMatch[] {
   const inCombat = isInCombatPhase(phase)
   const allCards = [...pools.hand, ...pools.battlefield]
+  const claimed = new Set<string>()
   return choice.options.map((opt, i) => {
-    const m = matchOptionToCard(choice.type, opt.label, pools)
+    let m: OptionMatch
+    if (typeof opt.cardId === 'number') {
+      const zone = zoneOf(opt.cardId, pools)
+      m = {
+        optionIndex: -1,
+        label: opt.label,
+        zone,
+        cardIds: zone === 'none' ? [] : [opt.cardId],
+        manaAbility: choice.type === 'play' ? isManaAbility(opt.label) : undefined,
+      }
+    } else {
+      m = matchOptionToCard(choice.type, opt.label, pools)
+      if (m.cardIds.length > 1) {
+        const free = m.cardIds.find((id) => !claimed.has(`${m.zone}:${id}`))
+        m = { ...m, cardIds: free === undefined ? [m.cardIds[0]] : [free] }
+      }
+    }
+    for (const id of m.cardIds) claimed.add(`${m.zone}:${id}`)
     if (choice.type === 'play' && !inCombat && m.cardIds.length > 0) {
       const card = allCards.find((c) => m.cardIds.includes(c.id))
       if (card?.type?.toLowerCase() === 'instant') {
-        return { ...m, zone: 'none' as const }
+        return { ...m, optionIndex: i, zone: 'none' as const }
       }
     }
     return { ...m, optionIndex: i }
   })
+}
+
+/**
+ * A "play" decision where the only options are mana taps (or nothing): the client passes
+ * it automatically, and the board treats it as "waiting" so it doesn't flash a prompt.
+ */
+export function isAutoPass(choice: PendingChoice | null | undefined, matches: OptionMatch[]): boolean {
+  return !!choice && choice.type === 'play' && !matches.some((m) => m.zone !== 'none' && !m.manaAbility)
 }
 
 /** Zones the choice actually uses, for highlighting the right card groups. */

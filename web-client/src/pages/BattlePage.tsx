@@ -1,18 +1,21 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Client } from '@stomp/stompjs'
 import {
   createMatch,
   createLobby,
   joinMatch,
   getBattleFeatures,
-  listMatches,
   concedeMatch,
   getMatchState,
+  getMatch,
+  cancelLobby,
 } from '../api/battleEndpoints'
 import { battleWsUrl, battleToken } from '../api/battleConfig'
-import { listDecks } from '../api/endpoints'
+import { getMyMatchHistory, listDecks, type MatchHistoryDto, type MatchResult } from '../api/endpoints'
 import { useAuth } from '../auth/AuthContext'
-import type { CardEntry, MatchDto, MatchState, PendingChoice, MatchPlayerState } from '../api/battleTypes'
+import { LOBBY_TTL_MS, type CardEntry, type MatchDto, type MatchState, type PendingChoice, type MatchPlayerState } from '../api/battleTypes'
+import { formatCountdown, remainingMs, timeAgo } from '../lib/time'
 import type { DeckDto } from '../api/types'
 import BattleCard from '../components/BattleCard'
 import { scryfallArtUrl } from '../lib/scryfall'
@@ -26,6 +29,7 @@ import {
   isImmediateChoice,
   primaryActionLabel,
   isInCombatPhase,
+  isAutoPass,
   availableMana,
   healthSegments,
   MANA_COLORS,
@@ -268,12 +272,48 @@ function engineMessage(err: unknown): string | null {
   return typeof message === 'string' && message.trim() ? message : null
 }
 
+/** The match this tab is in, so a reload can reconnect to it. */
+const ACTIVE_MATCH_KEY = 'cf_active_match'
+/** Coalesce bursts of engine snapshots (auto-passed steps) into one render per window. */
+const STATE_THROTTLE_MS = 150
+
+const RESULT_LABEL: Record<MatchResult, string> = {
+  WON: 'Won',
+  LOST: 'Lost',
+  DRAW: 'Draw',
+  ACTIVE: 'In progress',
+  WAITING: 'Waiting',
+  EXPIRED: 'Expired',
+  CANCELLED: 'Cancelled',
+}
+
+function xpLabel(h: MatchHistoryDto): string {
+  if (h.xp > 0) return `+${h.xp} XP`
+  return h.result === 'WON' || h.result === 'LOST' || h.result === 'DRAW' ? '+0 XP' : '—'
+}
+
+const forgetActiveMatch = () => {
+  try {
+    localStorage.removeItem(ACTIVE_MATCH_KEY)
+  } catch {
+    // storage unavailable
+  }
+}
+
 /** Dev only: /battle?mock renders a canned board (no engine); stripped from production builds. */
 const MOCK = import.meta.env.DEV && new URLSearchParams(window.location.search).has('mock')
 
 export default function BattlePage() {
   const { player } = useAuth()
-  const [matches, setMatches] = useState<MatchDto[]>([])
+  const [history, setHistory] = useState<MatchHistoryDto[]>([])
+  const [searchParams, setSearchParams] = useSearchParams()
+  const joinButtonRef = useRef<HTMLButtonElement | null>(null)
+  const [resuming, setResuming] = useState(() => !MOCK && !!localStorage.getItem(ACTIVE_MATCH_KEY))
+  const [now, setNow] = useState(() => Date.now())
+  const [lobbyClosed, setLobbyClosed] = useState(false)
+  const pendingStateRef = useRef<MatchState | null>(null)
+  const throttleTimer = useRef<number | null>(null)
+  const autoPassedRef = useRef<number | null>(null)
   const [decks, setDecks] = useState<DeckDto[]>([])
   const [selectedDeckId, setSelectedDeckId] = useState('')
   const [joinCode, setJoinCode] = useState('')
@@ -294,16 +334,96 @@ export default function BattlePage() {
   const prevStateRef = useRef<MatchState | null>(null)
   const resumingRef = useRef(false)
 
+  const refreshHistory = useCallback(() => {
+    getMyMatchHistory()
+      .then(setHistory)
+      .catch(() => {})
+  }, [])
+
   useEffect(() => {
-    Promise.all([listMatches(), listDecks(), getBattleFeatures()])
-      .then(([mList, dList, feats]) => {
-        setMatches(mList)
+    Promise.all([listDecks(), getBattleFeatures()])
+      .then(([dList, feats]) => {
         setDecks(dList)
         setAiEnabled(feats.aiBattlesEnabled)
         if (dList.length > 0) setSelectedDeckId(dList[0].id)
       })
       .catch(() => setNotice('Failed to load battle data.'))
+    refreshHistory()
+  }, [refreshHistory])
+
+  // /battle?join=CODE (from the open-battles feed): prefill the code; the player picks a deck and joins.
+  useEffect(() => {
+    const code = searchParams.get('join')
+    if (!code) return
+    setJoinCode(code.toUpperCase().slice(0, 6))
+    setNotice(`Joining battle ${code.toUpperCase()}: pick your deck, then press Join Battle.`)
+    setSearchParams({}, { replace: true })
+    window.setTimeout(() => joinButtonRef.current?.focus(), 0)
+  }, [searchParams, setSearchParams])
+
+  // After a reload, go straight back into the match this tab was playing.
+  useEffect(() => {
+    if (MOCK) return
+    const id = localStorage.getItem(ACTIVE_MATCH_KEY)
+    if (!id) return
+    getMatch(id)
+      .then((m) => {
+        if (m.status === 'ACTIVE' || m.status === 'PENDING') setActiveMatch(m)
+        else forgetActiveMatch()
+      })
+      .catch(() => {
+        // engine unreachable: keep the key and offer Rejoin from the history
+      })
+      .finally(() => setResuming(false))
   }, [])
+
+  useEffect(() => {
+    if (activeMatch && !MOCK) {
+      try {
+        localStorage.setItem(ACTIVE_MATCH_KEY, activeMatch.id)
+      } catch {
+        // storage unavailable: reload just returns to the lobby
+      }
+    }
+  }, [activeMatch])
+
+  /**
+   * Engine auto-passes produce bursts of snapshots a few ms apart; rendering each one made
+   * the board flicker. The first snapshot renders at once, the rest of a burst collapse
+   * into the newest one per STATE_THROTTLE_MS. Game over always renders immediately.
+   */
+  const applyState = useCallback((next: MatchState) => {
+    if (next.gameOver) {
+      if (throttleTimer.current !== null) window.clearTimeout(throttleTimer.current)
+      throttleTimer.current = null
+      pendingStateRef.current = null
+      setGameState(next)
+      return
+    }
+    if (throttleTimer.current === null) {
+      setGameState(next)
+      const flush = () => {
+        const queued = pendingStateRef.current
+        pendingStateRef.current = null
+        if (queued) {
+          setGameState(queued)
+          throttleTimer.current = window.setTimeout(flush, STATE_THROTTLE_MS)
+        } else {
+          throttleTimer.current = null
+        }
+      }
+      throttleTimer.current = window.setTimeout(flush, STATE_THROTTLE_MS)
+    } else {
+      pendingStateRef.current = next
+    }
+  }, [])
+
+  useEffect(
+    () => () => {
+      if (throttleTimer.current !== null) window.clearTimeout(throttleTimer.current)
+    },
+    [],
+  )
 
   const myIndex = (() => {
     if (!activeMatch || !player || MOCK) return 0
@@ -318,7 +438,7 @@ export default function BattlePage() {
     let stompClient: Client | null = null
 
     getMatchState(activeMatch.id)
-      .then(setGameState)
+      .then(applyState)
       .catch(() => {})
 
     battleToken().then((wsToken) => {
@@ -337,11 +457,17 @@ export default function BattlePage() {
               setInfo(parsed.message as string)
               return
             }
-            setGameState(parsed)
+            applyState(parsed)
             if (parsed.gameOver) {
-              listMatches().then(setMatches).catch(() => {})
+              forgetActiveMatch()
+              refreshHistory()
             }
           })
+          // Subscribing is what the engine treats as "back": re-sync the board and any
+          // decision that was requested while this tab was away.
+          getMatchState(activeMatch.id)
+            .then(applyState)
+            .catch(() => {})
         },
       })
       stompClient = client
@@ -354,7 +480,7 @@ export default function BattlePage() {
       stompClient?.deactivate()
       clientRef.current = null
     }
-  }, [activeMatch, player, myIndex])
+  }, [activeMatch, player, myIndex, applyState, refreshHistory])
 
   // Reconnect-on-resume: a backgrounded/suspended tab can silently kill the
   // socket and pause JS timers, so on return we immediately re-establish the
@@ -371,9 +497,8 @@ export default function BattlePage() {
         client.activate()
       }
       getMatchState(activeMatch.id)
-        .then(setGameState)
+        .then(applyState)
         .catch(() => {})
-      listMatches().then(setMatches).catch(() => {})
       window.setTimeout(() => {
         resumingRef.current = false
       }, 1000)
@@ -394,23 +519,30 @@ export default function BattlePage() {
       window.removeEventListener('pageshow', resume)
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [activeMatch])
+  }, [activeMatch, applyState])
 
   // While waiting for an opponent to join a lobby, poll for the game starting.
   useEffect(() => {
-    if (!activeMatch || activeMatch.status !== 'PENDING') return
+    if (!activeMatch || activeMatch.status !== 'PENDING' || lobbyClosed || MOCK) return
     const id = setInterval(async () => {
       try {
         const s = await getMatchState(activeMatch.id)
-        if (Array.isArray(s.players) && s.players.length > 0 && !s.gameOver) {
-          setGameState(s)
+        if (s.status === 'EXPIRED' || s.status === 'CANCELLED') {
+          setLobbyClosed(true)
+          forgetActiveMatch()
+        } else if (Array.isArray(s.players) && s.players.length > 0 && !s.gameOver) {
+          applyState(s)
         }
       } catch {
         // lobby not running yet
       }
     }, 3000)
-    return () => clearInterval(id)
-  }, [activeMatch])
+    const tick = setInterval(() => setNow(Date.now()), 1000)
+    return () => {
+      clearInterval(id)
+      clearInterval(tick)
+    }
+  }, [activeMatch, lobbyClosed, applyState])
 
   // Derive a lightweight event feed + life deltas by diffing consecutive snapshots.
   useEffect(() => {
@@ -492,8 +624,8 @@ export default function BattlePage() {
       battlefield: me?.battlefield ?? [],
       opponent: opponent?.battlefield ?? [],
     }, gameState.phase)
-    const nonMana = mats.filter((m) => m.zone !== 'none' && !m.manaAbility)
-    if (nonMana.length === 0) {
+    if (isAutoPass(choice, mats) && autoPassedRef.current !== choice.requestId) {
+      autoPassedRef.current = choice.requestId
       sendChoice(choice.requestId, [])
     }
   }, [gameState?.pendingChoice, gameState?.players, gameState?.phase, myIndex])
@@ -531,7 +663,7 @@ export default function BattlePage() {
       const m = await createMatch(selectedDeckId)
       setActiveMatch(m)
       setGameState(null)
-      setMatches(await listMatches())
+      refreshHistory()
     }, 'Failed to start match.')
   }
 
@@ -542,7 +674,7 @@ export default function BattlePage() {
       setActiveMatch(m)
       setGameState(null)
       setNotice('')
-      setMatches(await listMatches())
+      refreshHistory()
     }, 'Failed to create battle lobby.')
   }
 
@@ -556,7 +688,7 @@ export default function BattlePage() {
       setGameState(null)
       setJoinCode('')
       setNotice('')
-      setMatches(await listMatches())
+      refreshHistory()
     }, 'Failed to join battle. Check the code.')
   }
 
@@ -564,26 +696,76 @@ export default function BattlePage() {
     if (!activeMatch) return
     return lobbyAction(async () => {
       await concedeMatch(activeMatch.id)
+      forgetActiveMatch()
       setActiveMatch(null)
       setGameState(null)
-      setMatches(await listMatches())
+      refreshHistory()
     }, 'Failed to concede.')
   }
 
-  const backToLobby = async () => {
+  const backToLobby = () => {
+    forgetActiveMatch()
     setActiveMatch(null)
     setGameState(null)
+    setLobbyClosed(false)
     setInfo('')
     setEvents([])
     setLifeDeltas({})
-    setMatches(await listMatches())
+    refreshHistory()
   }
+
+  /** Host leaves the waiting room: the lobby closes and leaves the open-battles feed. */
+  const closeLobby = () => {
+    if (!activeMatch) return
+    const id = activeMatch.id
+    return lobbyAction(async () => {
+      await cancelLobby(id)
+      backToLobby()
+    }, 'Could not close the lobby.')
+  }
+
+  const rejoin = (matchId: string) =>
+    lobbyAction(async () => {
+      const m = await getMatch(matchId)
+      if (m.status !== 'ACTIVE' && m.status !== 'PENDING') {
+        refreshHistory()
+        throw new Error('That battle has ended.')
+      }
+      setGameState(null)
+      setLobbyClosed(false)
+      setActiveMatch(m)
+    }, 'Could not rejoin that battle.')
 
   if (activeMatch) {
     const over =
       gameState?.gameOver === true ||
       gameState?.status === 'COMPLETED' ||
       gameState?.status === 'CONCEDED'
+
+    const lobbyExpiresAt = Date.parse(activeMatch.createdAt) + LOBBY_TTL_MS
+    const lobbyLeft = Number.isNaN(lobbyExpiresAt) ? null : remainingMs(lobbyExpiresAt, now)
+    const lobbyGone =
+      lobbyClosed ||
+      gameState?.status === 'EXPIRED' ||
+      gameState?.status === 'CANCELLED' ||
+      (activeMatch.status === 'PENDING' && lobbyLeft === 0 && !gameState?.players?.length)
+
+    if (lobbyGone) {
+      return (
+        <div className="page">
+          <h2>Battle Lobby</h2>
+          <div className="panel" style={{ textAlign: 'center', marginBottom: 20 }}>
+            <h3>Lobby closed</h3>
+            <div className="meta">Nobody joined within 2 minutes. Create a new lobby to try again.</div>
+          </div>
+          <div className="filters" style={{ justifyContent: 'center' }}>
+            <button className="btn" onClick={backToLobby}>
+              Back to Lobby
+            </button>
+          </div>
+        </div>
+      )
+    }
 
     // Waiting for an opponent to join the lobby.
     if (gameState?.status === 'PENDING' || (gameState === null && !over)) {
@@ -608,10 +790,15 @@ export default function BattlePage() {
             <div style={{ color: 'var(--muted)', marginTop: 12 }}>
               Waiting for opponent to join{info ? ` — ${info}` : ''}…
             </div>
+            {lobbyLeft !== null && activeMatch.status === 'PENDING' && (
+              <div className="lobby-countdown" aria-live="polite">
+                Closes in <strong>{formatCountdown(lobbyLeft)}</strong>
+              </div>
+            )}
           </div>
           <div className="filters" style={{ justifyContent: 'center' }}>
-            <button className="btn" onClick={backToLobby}>
-              Cancel
+            <button className="btn ghost" onClick={closeLobby} disabled={busy}>
+              Close lobby
             </button>
           </div>
         </div>
@@ -620,12 +807,17 @@ export default function BattlePage() {
 
     // Terminal state with no live board snapshot.
     if (!Array.isArray(gameState?.players) || gameState!.players.length === 0) {
+      const lost = gameState?.status === 'ACTIVE' && !gameState.gameOver
       return (
         <div className="page">
           <h2>Live Combat Board</h2>
           <div className="panel" style={{ marginBottom: 20, textAlign: 'center' }}>
-            <h3>{gameState?.winnerName ?? 'Match over'}</h3>
-            <div style={{ color: 'var(--muted)' }}>{gameState?.winCondition ?? gameState?.status}</div>
+            <h3>{lost ? 'This battle is no longer running' : gameState?.winnerName ?? 'Match over'}</h3>
+            <div style={{ color: 'var(--muted)' }}>
+              {lost
+                ? 'The battle server restarted and live matches were lost. Start a new battle.'
+                : gameState?.winCondition ?? gameState?.status}
+            </div>
           </div>
           <button className="btn" onClick={backToLobby}>
             Back to Lobby
@@ -638,17 +830,22 @@ export default function BattlePage() {
     const me = state.players.find((p) => p.index === myIndex) ?? state.players[0]
     const opponent = state.players.find((p) => p.index !== myIndex) ?? state.players[1]
     const activePlayer = state.players[state.activePlayerIndex] ?? me
-    const isMyTurn = me ? me.hasPriority : false
-    const instruction = instructionFor(state, me, opponent)
-    const choice = state.pendingChoice
-
-    const matches = choice
-      ? matchOptionsToCards(choice, {
+    const pendingChoice = state.pendingChoice
+    const allMatches = pendingChoice
+      ? matchOptionsToCards(pendingChoice, {
           hand: me?.hand ?? [],
           battlefield: me?.battlefield ?? [],
           opponent: opponent?.battlefield ?? [],
         }, state.phase)
       : []
+    // Decisions the client passes on its own are shown as "waiting", not as a prompt.
+    const autoPass = isAutoPass(pendingChoice, allMatches)
+    const choice = autoPass ? null : pendingChoice
+    const matches = autoPass ? [] : allMatches
+    const isMyTurn = !!choice
+    const instruction = autoPass
+      ? instructionFor({ ...state, pendingChoice: null }, me && { ...me, hasPriority: false }, opponent)
+      : instructionFor(state, me, opponent)
     const optionIndexByCard = new Map<string, number>()
     for (const m of matches) {
       for (const id of m.cardIds) {
@@ -738,7 +935,7 @@ export default function BattlePage() {
                 color: isMyTurn ? '#fff' : 'var(--muted)',
               }}
             >
-              {isMyTurn ? 'Your priority' : `${activePlayer?.name ?? 'Opponent'}'s turn`}
+              {isMyTurn ? 'Your move' : `${activePlayer?.name ?? 'Opponent'}'s turn`}
             </span>
             <span
               className="chip"
@@ -831,16 +1028,21 @@ export default function BattlePage() {
           )}
         </div>
 
-        {choice && !over && (
-          <ActionBar
-            choice={choice}
-            textOptions={textOptions}
-            hasCardOptions={hasCardOptions}
-            selected={selected}
-            canConfirm={canConfirm}
-            onSend={(indices) => sendChoice(choice.requestId, indices)}
-          />
-        )}
+        {!over &&
+          (choice ? (
+            <ActionBar
+              choice={choice}
+              textOptions={textOptions}
+              hasCardOptions={hasCardOptions}
+              selected={selected}
+              canConfirm={canConfirm}
+              onSend={(indices) => sendChoice(choice.requestId, indices)}
+            />
+          ) : (
+            <div className="battle-actionbar idle" aria-live="polite">
+              Waiting for {opponent?.name ?? 'your opponent'}…
+            </div>
+          ))}
 
         <details className="panel battle-log">
           <summary>Game Log</summary>
@@ -909,13 +1111,11 @@ export default function BattlePage() {
     )
   }
 
-  const pendingLobbies = matches.filter((m) => m.status === 'PENDING')
-  const activeMatches = matches.filter((m) => m.status === 'ACTIVE')
+  const openMine = history.filter((h) => h.result === 'ACTIVE' || h.result === 'WAITING')
 
   return (
     <div className="page">
-      <h2>Battle Lobby</h2>
-      <p style={{ color: 'var(--muted)', marginTop: -8 }}>Queue for a headless 1v1 combat match.</p>
+      <h2>Battle</h2>
 
       {notice && (
         <div className="problem good" style={{ marginBottom: 16 }}>
@@ -923,98 +1123,85 @@ export default function BattlePage() {
         </div>
       )}
 
-      <div className="panel" style={{ marginBottom: 24 }}>
-        <h3>Battle Setup</h3>
+      {resuming && <div className="panel resume-banner">Reconnecting to your battle…</div>}
+      {!resuming &&
+        openMine.map((h) => (
+          <div key={h.matchId} className="panel resume-banner">
+            <span className="grow">{h.result === 'ACTIVE' ? 'You have a battle in progress.' : 'Your lobby is still open.'}</span>
+            <button className="btn" onClick={() => rejoin(h.matchId)} disabled={busy}>
+              Rejoin
+            </button>
+          </div>
+        ))}
+
+      <div className="panel battle-setup">
+        <div className="battle-setup-head">
+          <h3>Battle Setup</h3>
+          {decks.length > 0 && (
+            <select
+              className="deck-select"
+              aria-label="Deck"
+              value={selectedDeckId}
+              onChange={(e) => setSelectedDeckId(e.target.value)}
+            >
+              {decks.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name} ({d.formatCode})
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
         {decks.length === 0 ? (
           <div className="empty">You need a saved deck before battling. Build one in the Deck Builder!</div>
         ) : (
           <>
-            <div className="filters" style={{ marginBottom: 12 }}>
-              <select
-                value={selectedDeckId}
-                onChange={(e) => setSelectedDeckId(e.target.value)}
-                style={{ minWidth: 220 }}
-              >
-                {decks.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name} ({d.formatCode})
-                  </option>
-                ))}
-              </select>
-              <button className="btn" onClick={startLobby} disabled={busy}>
-                Create Battle Lobby
-              </button>
-            </div>
-            <div className="filters">
+            <div className="battle-join-row">
               <input
                 value={joinCode}
                 onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
-                placeholder="Enter battle code"
-                style={{ minWidth: 180, textTransform: 'uppercase', letterSpacing: 2, fontFamily: 'monospace' }}
+                placeholder="Battle code"
+                aria-label="Battle code"
                 maxLength={6}
               />
-              <button className="btn" onClick={joinLobby} disabled={busy}>
+              <button ref={joinButtonRef} className="btn" onClick={joinLobby} disabled={busy}>
                 Join Battle
               </button>
             </div>
+            <div className="battle-or">
+              <span>or</span>
+            </div>
+            <button className="btn battle-create" onClick={startLobby} disabled={busy}>
+              Create Battle Lobby
+            </button>
             {aiEnabled && (
-              <div className="filters" style={{ marginTop: 12 }}>
-                <button className="btn" onClick={startVsAi} disabled={busy}>
-                  Start AI Battle
-                </button>
-              </div>
+              <button className="btn ghost battle-create" onClick={startVsAi} disabled={busy}>
+                Practice vs Campus Bot
+              </button>
             )}
+            <p className="meta battle-setup-note">
+              A new lobby shows up on the Events page, where anyone can join it with one tap. It closes after 2
+              minutes if nobody does.
+            </p>
           </>
         )}
       </div>
 
-      {pendingLobbies.length > 0 && (
-        <div className="panel" style={{ marginBottom: 24 }}>
-          <h3>My Open Lobbies</h3>
-          {pendingLobbies.map((m) => (
-            <div key={m.id} className="deck-row">
-              <span className="grow">
-                <span style={{ fontWeight: 700 }}>Waiting…</span>
-                <span style={{ color: 'var(--good)', marginLeft: 12, fontFamily: 'monospace', letterSpacing: 2 }}>
-                  Code: {m.battleCode}
-                </span>
-                <span style={{ color: 'var(--muted)', marginLeft: 12 }}>
-                  Created: {new Date(m.createdAt).toLocaleTimeString()}
-                </span>
-              </span>
-              <button className="btn" onClick={() => setActiveMatch(m)}>
-                View
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
       <div className="panel">
         <h3>Match History</h3>
-        {matches.length === 0 && <div className="empty">No matches played yet.</div>}
-        {matches.map((m) => (
-          <div key={m.id} className="deck-row">
-            <span className="grow">
-              <span style={{ fontWeight: 700 }}>Match {m.id.slice(0, 8)}…</span>
-              <span style={{ color: 'var(--muted)', marginLeft: 12 }}>Status: {m.status}</span>
-              <span style={{ color: 'var(--muted)', marginLeft: 12 }}>
-                Created: {new Date(m.createdAt).toLocaleTimeString()}
-              </span>
-            </span>
-            {activeMatches.some((a) => a.id === m.id) && (
-              <button
-                className="btn"
-                onClick={() => {
-                  setActiveMatch(m)
-                  setGameState(null)
-                }}
-              >
-                Reconnect
-              </button>
-            )}
+        {history.length === 0 ? (
+          <div className="empty">No matches played yet.</div>
+        ) : (
+          <div className="history-list">
+            {history.map((h) => (
+              <div key={h.matchId} className="history-row">
+                <span className={`result-badge ${h.result.toLowerCase()}`}>{RESULT_LABEL[h.result] ?? h.result}</span>
+                <span className="history-xp">{xpLabel(h)}</span>
+                <span className="history-time">{timeAgo(h.at)}</span>
+              </div>
+            ))}
           </div>
-        ))}
+        )}
       </div>
     </div>
   )

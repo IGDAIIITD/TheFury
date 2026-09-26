@@ -4,11 +4,17 @@ export interface MatchDto {
   player2Id: string | null
   deck1Id: string
   deck2Id: string | null
-  status: 'PENDING' | 'ACTIVE' | 'COMPLETED' | 'CONCEDED'
+  status: MatchStatus
   winnerId: string | null
   battleCode: string | null
   createdAt: string
 }
+
+/** EXPIRED = nobody joined the lobby within 2 minutes; CANCELLED = the host closed it. */
+export type MatchStatus = 'PENDING' | 'ACTIVE' | 'COMPLETED' | 'CONCEDED' | 'EXPIRED' | 'CANCELLED'
+
+/** A battle lobby stays open this long (the engine closes it after that). */
+export const LOBBY_TTL_MS = 2 * 60 * 1000
 
 export interface CardEntry {
   id: number
@@ -48,6 +54,8 @@ export interface StackItemState {
 export interface PendingChoiceOption {
   label: string
   value: string
+  /** The card this option is about (newer engines); lets identical cards be told apart. */
+  cardId?: number
 }
 
 export interface PendingChoice {
@@ -74,8 +82,10 @@ export interface MatchState {
   gameOver?: boolean
   winCondition?: string | null
   winnerName?: string | null
-  status?: 'PENDING' | 'ACTIVE' | 'COMPLETED' | 'CONCEDED'
+  status?: MatchStatus
   winnerId?: string | null
+  /** Set on the REST fallback for matches that aren't running (e.g. a waiting lobby). */
+  createdAt?: string
 }
 
 export interface BattleFeatures {

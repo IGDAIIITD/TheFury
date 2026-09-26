@@ -24,11 +24,6 @@ battleApi.interceptors.response.use(
   },
 )
 
-export async function listMatches(): Promise<MatchDto[]> {
-  const { data } = await battleApi.get<MatchDto[]>('/battle/matches')
-  return data
-}
-
 export async function createMatch(deckId: string, opponentPlayerId?: string, opponentDeckId?: string): Promise<MatchDto> {
   const { data } = await battleApi.post<MatchDto>('/battle/create', { deckId, opponentPlayerId, opponentDeckId })
   return data
@@ -56,4 +51,13 @@ export async function concedeMatch(matchId: string): Promise<void> {
 export async function getMatchState(matchId: string): Promise<MatchState> {
   const { data } = await battleApi.get<MatchState>(`/battle/matches/${matchId}/state`)
   return data
+}
+export async function getMatch(matchId: string): Promise<MatchDto> {
+  const { data } = await battleApi.get<MatchDto>(`/battle/matches/${matchId}`)
+  return data
+}
+
+/** Host closes their own waiting lobby (it leaves the open-battles feed). */
+export async function cancelLobby(matchId: string): Promise<void> {
+  await battleApi.post(`/battle/matches/${matchId}/cancel`)
 }

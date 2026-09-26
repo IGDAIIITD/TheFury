@@ -10,6 +10,7 @@ import {
   isImmediateChoice,
   primaryActionLabel,
   manaSourceColors,
+  manaCostSymbols,
   availableMana,
   healthSegments,
   MANA_EMOJI,
@@ -446,5 +447,64 @@ describe('healthSegments', () => {
   it('clamps at zero and reports life gain above 20 as overflow', () => {
     expect(healthSegments(-3)).toEqual({ filled: 0, total: 20, overflow: 0 })
     expect(healthSegments(24)).toEqual({ filled: 20, total: 20, overflow: 4 })
+  })
+})
+
+describe('matchOptionsToCards with identical cards', () => {
+  const warriors = {
+    hand: [],
+    battlefield: [card(21, 'Elvish Warrior'), card(22, 'Elvish Warrior'), card(23, 'Forest')],
+    opponent: [],
+  }
+
+  it('uses the engine card id when present, one option per card', () => {
+    const c = choice({
+      type: 'attack',
+      options: [
+        { label: 'Elvish Warrior', value: '0', cardId: 22 },
+        { label: 'Elvish Warrior', value: '1', cardId: 21 },
+      ],
+    })
+    const m = matchOptionsToCards(c, warriors)
+    expect(m.map((x) => [x.optionIndex, x.zone, x.cardIds])).toEqual([
+      [0, 'battlefield', [22]],
+      [1, 'battlefield', [21]],
+    ])
+  })
+
+  it('without card ids, gives same-name options their own card instead of the first option taking both', () => {
+    const c = choice({
+      type: 'attack',
+      options: [
+        { label: 'Elvish Warrior', value: '0' },
+        { label: 'Elvish Warrior', value: '1' },
+      ],
+    })
+    const m = matchOptionsToCards(c, warriors)
+    expect(m.map((x) => x.cardIds)).toEqual([[21], [22]])
+  })
+
+  it('a card id that is on no visible zone maps to a text option', () => {
+    const c = choice({ type: 'target', options: [{ label: 'Hidden', value: '0', cardId: 999 }] })
+    expect(matchOptionsToCards(c, warriors)[0].zone).toBe('none')
+  })
+})
+
+describe('manaCostSymbols', () => {
+  it('splits generic mana from one pip per colored symbol', () => {
+    expect(manaCostSymbols('{2}{G}{G}')).toEqual([
+      { kind: 'generic', amount: 2 },
+      { kind: 'color', color: 'G' },
+      { kind: 'color', color: 'G' },
+    ])
+    expect(manaCostSymbols('{R}')).toEqual([{ kind: 'color', color: 'R' }])
+  })
+  it('drops {0}, keeps X / hybrid as other, and handles no cost', () => {
+    expect(manaCostSymbols('{0}')).toEqual([])
+    expect(manaCostSymbols('{X}{R/G}')).toEqual([
+      { kind: 'other', text: 'X' },
+      { kind: 'other', text: 'R/G' },
+    ])
+    expect(manaCostSymbols(null)).toEqual([])
   })
 })

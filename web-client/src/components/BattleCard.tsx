@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import type { CardEntry } from '../api/battleTypes'
-import { renderManaCost, describeManaCost } from '../pages/battleUi'
+import { renderManaCost, describeManaCost, manaCostSymbols, MANA_NAMES } from '../pages/battleUi'
 import { scryfallArtUrl } from '../lib/scryfall'
 
 export interface BattleCardProps {
@@ -23,6 +23,29 @@ export interface BattleCardProps {
 }
 
 const LONG_PRESS_MS = 450
+
+/** Cost overlay: a grey circle for generic mana, one colored dot per colored pip. */
+export function ManaCostPips({ cost }: { cost: string | null | undefined }) {
+  const symbols = manaCostSymbols(cost)
+  if (symbols.length === 0) return null
+  return (
+    <span className="cost-pips" title={describeManaCost(cost)} aria-label={`Costs ${describeManaCost(cost)}`}>
+      {symbols.map((sym, i) =>
+        sym.kind === 'generic' ? (
+          <span key={i} className="pip generic">
+            {sym.amount}
+          </span>
+        ) : sym.kind === 'color' ? (
+          <span key={i} className={`pip mana-${sym.color}`} title={MANA_NAMES[sym.color]} />
+        ) : (
+          <span key={i} className="pip generic">
+            {sym.text}
+          </span>
+        ),
+      )}
+    </span>
+  )
+}
 
 /**
  * One card on the board or in hand. Art mode shows the whole printed card (name, cost and
@@ -117,6 +140,7 @@ export default function BattleCard({
         </div>
       )}
 
+      {art && <ManaCostPips cost={card.cost} />}
       {isCreature && (
         <span className={`battle-card-pt${card.damage ? ' hurt' : ''}`}>
           {card.power}/{card.toughness}
