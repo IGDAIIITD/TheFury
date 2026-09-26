@@ -21,7 +21,7 @@ export default function OnboardingModal() {
   return (
     <div className="onboard-overlay" onClick={dismiss}>
       <div className="onboard-card" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Install guide">
-        <h3>Welcome to Campus Forge</h3>
+        <h3>Welcome to The Fury</h3>
         <p className="meta">Install the app for the full experience.</p>
         <ul className="onboard-list">
           <li>

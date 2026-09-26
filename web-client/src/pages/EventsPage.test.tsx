@@ -55,7 +55,8 @@ beforeEach(() => {
     player: { id: 'p1', displayName: 'Tester', email: 't@campus.edu', role: 'ROLE_PLAYER' },
     token: 'x',
     login: vi.fn(),
-    register: vi.fn(),
+    loginWithRoll: vi.fn(),
+    registerWithRoll: vi.fn(),
     refreshPlayer: vi.fn(),
     logout: vi.fn(),
   })

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { browseCards, getCollection, toggleFavorite } from '../api/endpoints'
-import { colorIdentityOf, colorSwatches, swatchBg } from '../lib/colors'
+import { colorIdentityOf, colorSwatches, swatchBg, swatchFg } from '../lib/colors'
 import { CardArt } from '../lib/scryfall'
 import { CACHE_KEYS, cacheGet, cacheSet } from '../lib/idb'
 import type { CardDto, CollectionEntryDto } from '../api/types'
@@ -311,7 +311,7 @@ export default function CollectionPage() {
                   <span
                     key={c}
                     className="swatch"
-                    style={{ background: swatchBg(c), color: c === 'C' ? 'var(--muted)' : '#0f1220' }}
+                    style={{ background: swatchBg(c), color: swatchFg(c) }}
                   >
                     {c}
                   </span>

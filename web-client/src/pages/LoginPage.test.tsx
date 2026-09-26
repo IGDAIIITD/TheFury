@@ -4,19 +4,38 @@ import { MemoryRouter } from 'react-router-dom'
 import { vi } from 'vitest'
 import LoginPage from './LoginPage'
 import { useAuth } from '../auth/AuthContext'
+import { checkRoll } from '../api/rollAuth'
 
 vi.mock('../auth/AuthContext', () => ({
   useAuth: vi.fn(),
 }))
 
+vi.mock('../api/rollAuth', () => ({
+  ROLL_RE: /^[0-9]{7}$/,
+  checkRoll: vi.fn(),
+}))
+
 const mockedUseAuth = useAuth as unknown as ReturnType<typeof vi.fn>
+const mockedCheckRoll = checkRoll as unknown as ReturnType<typeof vi.fn>
+
+const AADI = {
+  rollNo: '2026001',
+  name: 'Aadi Dhariwal',
+  program: 'CSE',
+  degreeLevel: 'BTECH',
+  batch: 2026,
+}
+
+let auth: Record<string, ReturnType<typeof vi.fn>>
 
 beforeEach(() => {
   vi.clearAllMocks()
-  mockedUseAuth.mockReturnValue({
+  auth = {
     login: vi.fn().mockResolvedValue(undefined),
-    register: vi.fn().mockResolvedValue(undefined),
-  })
+    loginWithRoll: vi.fn().mockResolvedValue(undefined),
+    registerWithRoll: vi.fn().mockResolvedValue(undefined),
+  }
+  mockedUseAuth.mockReturnValue(auth)
 })
 
 function renderPage() {
@@ -27,71 +46,84 @@ function renderPage() {
   )
 }
 
-test('shows cohort fields only in register mode', () => {
+function identify(roll = '2026001', first = 'Aadi') {
+  fireEvent.change(screen.getByLabelText('Roll number'), { target: { value: roll } })
+  fireEvent.change(screen.getByLabelText('First name'), { target: { value: first } })
+  fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+}
+
+test('asks for roll number and first name, never an email or cohort', () => {
   const { container } = renderPage()
+  expect(screen.getByText('The Fury')).toBeInTheDocument()
+  expect(screen.getByLabelText('Roll number')).toBeInTheDocument()
+  expect(screen.getByLabelText('First name')).toBeInTheDocument()
+  expect(screen.queryByLabelText(/password/i)).not.toBeInTheDocument()
   expect(container.querySelectorAll('select').length).toBe(0)
-
-  fireEvent.click(screen.getByText('Register'))
-
-  expect(container.querySelectorAll('select').length).toBe(1)
+  expect(screen.queryByText(/campus forge/i)).not.toBeInTheDocument()
 })
 
-test('specialization options depend on the selected degree', () => {
-  const { container } = renderPage()
-  fireEvent.click(screen.getByText('Register'))
-
-  const selects = () => Array.from(container.querySelectorAll('select'))
-  const degree = selects()[0] as HTMLSelectElement
-
-  fireEvent.change(degree, { target: { value: 'BTECH' } })
-
-  let spec = selects()[1] as HTMLSelectElement
-  expect(Array.from(spec.options).map((o) => o.value)).toEqual(
-    expect.arrayContaining(['CSE', 'CSAI', 'CSECON', 'ECE', 'EVE']),
-  )
-
-  fireEvent.change(degree, { target: { value: 'MTECH' } })
-
-  spec = selects()[1] as HTMLSelectElement
-  expect(Array.from(spec.options).map((o) => o.value)).toEqual(['', 'CSE', 'ECE'])
+test('keeps only digits in the roll number and rejects short rolls locally', () => {
+  renderPage()
+  const roll = screen.getByLabelText('Roll number') as HTMLInputElement
+  fireEvent.change(roll, { target: { value: '20a26-0012345' } })
+  expect(roll.value).toBe('2026001')
+  identify('20260', 'Aadi')
+  expect(screen.getByRole('alert')).toHaveTextContent('7 digits')
+  expect(mockedCheckRoll).not.toHaveBeenCalled()
 })
 
-test('register submits degree level and specialization', async () => {
-  const { container } = renderPage()
-  fireEvent.click(screen.getByText('Register'))
-
-  fireEvent.change(screen.getByPlaceholderText('e.g. Sorceress Erin'), { target: { value: 'Sorceress' } })
-  fireEvent.change(screen.getByPlaceholderText('you@campus.edu'), { target: { value: 'new@campus.edu' } })
-  fireEvent.change(container.querySelector('input[type="password"]') as HTMLInputElement, {
-    target: { value: 'pw123456' },
-  })
-
-  const selects = () => Array.from(container.querySelectorAll('select'))
-  fireEvent.change(selects()[0], { target: { value: 'BTECH' } })
-  fireEvent.change(selects()[1], { target: { value: 'CSAI' } })
-
-  fireEvent.click(screen.getByText('Register'))
-
-  await waitFor(() =>
-    expect(mockedUseAuth().register).toHaveBeenCalledWith(
-      'new@campus.edu',
-      'pw123456',
-      'Sorceress',
-      'BTECH',
-      'CSAI',
-    ),
-  )
+test('a name mismatch stays on the first step and shows the server message', async () => {
+  mockedCheckRoll.mockRejectedValue(Object.assign(new Error("That first name doesn't match this roll number."), { status: 403 }))
+  renderPage()
+  identify('2026001', 'Aarav')
+  await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent("doesn't match"))
+  expect(mockedCheckRoll).toHaveBeenCalledWith('2026001', 'Aarav')
+  expect(screen.queryByLabelText(/password/i)).not.toBeInTheDocument()
 })
 
-test('login submits email and password only', async () => {
-  const { container } = renderPage()
-  fireEvent.change(screen.getByPlaceholderText('you@campus.edu'), { target: { value: 'you@campus.edu' } })
-  fireEvent.change(container.querySelector('input[type="password"]') as HTMLInputElement, {
-    target: { value: 'pw123456' },
-  })
+test('a NEW roll shows the roster identity and creates the account with a confirmed password', async () => {
+  mockedCheckRoll.mockResolvedValue({ ...AADI, status: 'NEW' })
+  renderPage()
+  identify()
+  await screen.findByText('Aadi Dhariwal')
+  expect(screen.getByText(/B\.Tech CSE/)).toBeInTheDocument()
 
-  fireEvent.click(screen.getByText('Log in'))
+  fireEvent.change(screen.getByLabelText('Create a password'), { target: { value: 'dragons12' } })
+  fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'dragons13' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Create account' }))
+  expect(screen.getByRole('alert')).toHaveTextContent('do not match')
+  expect(auth.registerWithRoll).not.toHaveBeenCalled()
 
-  await waitFor(() => expect(mockedUseAuth().login).toHaveBeenCalledWith('you@campus.edu', 'pw123456'))
-  expect(mockedUseAuth().register).not.toHaveBeenCalled()
+  fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'dragons12' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Create account' }))
+  await waitFor(() => expect(auth.registerWithRoll).toHaveBeenCalledWith('2026001', 'Aadi', 'dragons12'))
+})
+
+test('a REGISTERED roll just asks for the password', async () => {
+  mockedCheckRoll.mockResolvedValue({ ...AADI, status: 'REGISTERED' })
+  renderPage()
+  identify()
+  fireEvent.change(await screen.findByLabelText('Password'), { target: { value: 'dragons12' } })
+  expect(screen.queryByLabelText('Confirm password')).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+  await waitFor(() => expect(auth.loginWithRoll).toHaveBeenCalledWith('2026001', 'dragons12'))
+})
+
+test('a wrong password gets a friendly message', async () => {
+  mockedCheckRoll.mockResolvedValue({ ...AADI, status: 'REGISTERED' })
+  auth.loginWithRoll.mockRejectedValue(new Error('Invalid login credentials'))
+  renderPage()
+  identify()
+  fireEvent.change(await screen.findByLabelText('Password'), { target: { value: 'nope-nope' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+  await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Wrong password'))
+})
+
+test('staff sign-in still accepts email + password', async () => {
+  renderPage()
+  fireEvent.click(screen.getByRole('button', { name: 'Staff sign-in' }))
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'organiser@iiitd.ac.in' } })
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'secret' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+  await waitFor(() => expect(auth.login).toHaveBeenCalledWith('organiser@iiitd.ac.in', 'secret'))
 })

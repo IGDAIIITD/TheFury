@@ -1,160 +1,235 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
-import {
-  BTECH_SPECIALIZATIONS,
-  MTECH_SPECIALIZATIONS,
-  type DegreeLevel,
-} from '../api/types'
+import { checkRoll, ROLL_RE, type RollStatus } from '../api/rollAuth'
+import logo from '../assets/igda-iiitd-logo.png'
 
-type Mode = 'login' | 'register'
+/**
+ * Sign-in for The Fury.
+ *   1. identify: roll number + first name, checked against the IIITD student roster
+ *   2. password: log in (REGISTERED) or choose a password (NEW; the profile is filled
+ *      from the roster, so there's nothing else to fill in)
+ * Staff and older email accounts use the "Staff sign-in" link.
+ */
+type Step = 'identify' | 'password' | 'staff'
 
-const DEGREE_LABELS: { value: DegreeLevel; label: string }[] = [
-  { value: 'BTECH', label: 'B.Tech' },
-  { value: 'MTECH', label: 'M.Tech' },
-]
+const MIN_PASSWORD = 8
 
-const SPECIALIZATIONS: Record<DegreeLevel, readonly string[]> = {
-  BTECH: [...BTECH_SPECIALIZATIONS],
-  MTECH: [...MTECH_SPECIALIZATIONS],
+const DEGREE_LABEL: Record<string, string> = { BTECH: 'B.Tech', MTECH: 'M.Tech' }
+
+function errorText(err: unknown, fallback: string): string {
+  const e = err as { status?: number; message?: string } | null
+  if (e?.message === 'Invalid login credentials') return 'Wrong password. Try again.'
+  // A 404 that isn't student-auth's own "not in the student list" means the function is missing.
+  const unknownRoll = /student list/i.test(e?.message ?? '')
+  if (e?.status === 404 && !unknownRoll) return 'Sign-in is not available right now. Try again in a moment.'
+  return e?.message || fallback
 }
 
 export default function LoginPage() {
-  const { login, register } = useAuth()
+  const { login, loginWithRoll, registerWithRoll } = useAuth()
   const navigate = useNavigate()
-  const [mode, setMode] = useState<Mode>('login')
-  const [email, setEmail] = useState('')
+  const [step, setStep] = useState<Step>('identify')
+  const [rollNo, setRollNo] = useState('')
+  const [firstName, setFirstName] = useState('')
+  const [student, setStudent] = useState<RollStatus | null>(null)
   const [password, setPassword] = useState('')
-  const [displayName, setDisplayName] = useState('')
-  const [degreeLevel, setDegreeLevel] = useState<DegreeLevel | ''>('')
-  const [specialization, setSpecialization] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [email, setEmail] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault()
+  const run = async (action: () => Promise<void>, fallback: string) => {
     setError('')
     setBusy(true)
     try {
-      if (mode === 'login') {
-        await login(email, password)
-      } else {
-        await register(email, password, displayName, degreeLevel, specialization)
-      }
-      navigate('/collection')
+      await action()
     } catch (err) {
-      const message = (err as { message?: string })?.message
-      setError(message ?? 'Something went wrong.')
+      setError(errorText(err, fallback))
     } finally {
       setBusy(false)
     }
   }
 
-  const switchMode = (m: Mode) => {
-    setMode(m)
+  const go = (next: Step) => {
+    setStep(next)
     setError('')
+    setPassword('')
+    setConfirm('')
+  }
+
+  const identify = (e: React.FormEvent) => {
+    e.preventDefault()
+    const roll = rollNo.trim()
+    if (!ROLL_RE.test(roll)) return setError('Roll numbers are 7 digits, e.g. 2026001.')
+    if (!firstName.trim()) return setError('Enter your first name.')
+    return run(async () => {
+      setStudent(await checkRoll(roll, firstName.trim()))
+      go('password')
+    }, 'Could not check your roll number.')
+  }
+
+  const submitPassword = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!student) return
+    if (student.status === 'NEW') {
+      if (password.length < MIN_PASSWORD) return setError(`Use at least ${MIN_PASSWORD} characters.`)
+      if (password !== confirm) return setError('The passwords do not match.')
+      return run(async () => {
+        await registerWithRoll(student.rollNo, firstName.trim(), password)
+        navigate('/collection')
+      }, 'Could not create your account.')
+    }
+    return run(async () => {
+      await loginWithRoll(student.rollNo, password)
+      navigate('/collection')
+    }, 'Could not log in.')
+  }
+
+  const staffLogin = (e: React.FormEvent) => {
+    e.preventDefault()
+    return run(async () => {
+      await login(email.trim(), password)
+      navigate('/collection')
+    }, 'Could not log in.')
   }
 
   return (
     <div className="auth-page">
       <div className="auth-card">
-        <h1>Campus Forge</h1>
-        <p>{mode === 'login' ? 'Welcome back, Planeswalker.' : 'Create your account to start scanning.'}</p>
+        <img className="auth-logo" src={logo} alt="IGDA IIIT-Delhi" />
+        <h1>The Fury</h1>
+        <p className="tagline">
+          {step === 'staff'
+            ? 'Staff sign-in'
+            : step === 'password' && student?.status === 'NEW'
+              ? 'Choose a password to claim your deck.'
+              : 'Scan. Build. Battle.'}
+        </p>
 
-        <form onSubmit={submit}>
-          {mode === 'register' && (
+        {step === 'identify' && (
+          <form onSubmit={identify} noValidate>
             <div className="field">
-              <label>Display name</label>
+              <label htmlFor="roll">Roll number</label>
               <input
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                placeholder="e.g. Sorceress Erin"
+                id="roll"
+                className="roll"
+                value={rollNo}
+                onChange={(e) => setRollNo(e.target.value.replace(/\D/g, '').slice(0, 7))}
+                inputMode="numeric"
+                autoComplete="username"
+                placeholder="2026001"
+                autoFocus
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="first-name">First name</label>
+              <input
+                id="first-name"
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
+                autoComplete="given-name"
+                placeholder="As on the student list"
+              />
+            </div>
+            <div className="error" role="alert">{error}</div>
+            <button className="btn" style={{ width: '100%' }} disabled={busy}>
+              {busy ? 'Checking…' : 'Continue'}
+            </button>
+          </form>
+        )}
+
+        {step === 'password' && student && (
+          <form onSubmit={submitPassword} noValidate>
+            <div className="auth-who">
+              <strong>{student.name}</strong>
+              <span className="meta">
+                {student.rollNo} · {DEGREE_LABEL[student.degreeLevel] ?? student.degreeLevel} {student.program} ·{' '}
+                {student.batch} batch
+              </span>
+            </div>
+            <div className="field">
+              <label htmlFor="password">{student.status === 'NEW' ? 'Create a password' : 'Password'}</label>
+              <input
+                id="password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete={student.status === 'NEW' ? 'new-password' : 'current-password'}
+                autoFocus
+              />
+            </div>
+            {student.status === 'NEW' && (
+              <div className="field">
+                <label htmlFor="confirm">Confirm password</label>
+                <input
+                  id="confirm"
+                  type="password"
+                  value={confirm}
+                  onChange={(e) => setConfirm(e.target.value)}
+                  autoComplete="new-password"
+                />
+              </div>
+            )}
+            <div className="error" role="alert">{error}</div>
+            <button className="btn" style={{ width: '100%' }} disabled={busy}>
+              {busy ? 'Please wait…' : student.status === 'NEW' ? 'Create account' : 'Log in'}
+            </button>
+            <div className="auth-footer">
+              <button type="button" className="btn link" onClick={() => go('identify')}>
+                Not you?
+              </button>
+              {student.status === 'REGISTERED' && (
+                <span className="meta">Forgot it? Ask an IGDA organiser.</span>
+              )}
+            </div>
+          </form>
+        )}
+
+        {step === 'staff' && (
+          <form onSubmit={staffLogin}>
+            <div className="field">
+              <label htmlFor="email">Email</label>
+              <input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                autoComplete="username"
                 required
               />
             </div>
-          )}
-          <div className="field">
-            <label>Campus email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@campus.edu"
-              required
-            />
-          </div>
-          <div className="field">
-            <label>Password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-            />
-          </div>
-          {mode === 'register' && (
-            <>
-              <div className="field">
-                <label>Degree</label>
-                <select
-                  value={degreeLevel}
-                  onChange={(e) => {
-                    setDegreeLevel(e.target.value as DegreeLevel)
-                    setSpecialization('')
-                  }}
-                  required
-                >
-                  <option value="" disabled>
-                    Select your degree
-                  </option>
-                  {DEGREE_LABELS.map((d) => (
-                    <option key={d.value} value={d.value}>
-                      {d.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              {degreeLevel && (
-                <div className="field">
-                  <label>Specialization</label>
-                  <select value={specialization} onChange={(e) => setSpecialization(e.target.value)} required>
-                    <option value="" disabled>
-                      Select specialization
-                    </option>
-                    {SPECIALIZATIONS[degreeLevel].map((s) => (
-                      <option key={s} value={s}>
-                        {s}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-            </>
-          )}
-          <div className="error">{error}</div>
-          <button className="btn" style={{ width: '100%' }} disabled={busy}>
-            {busy ? 'Please wait…' : mode === 'login' ? 'Log in' : 'Register'}
-          </button>
-        </form>
+            <div className="field">
+              <label htmlFor="staff-password">Password</label>
+              <input
+                id="staff-password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+                required
+              />
+            </div>
+            <div className="error" role="alert">{error}</div>
+            <button className="btn" style={{ width: '100%' }} disabled={busy}>
+              {busy ? 'Please wait…' : 'Log in'}
+            </button>
+          </form>
+        )}
 
-        <p style={{ marginTop: 16, textAlign: 'center', fontSize: 14 }}>
-          {mode === 'login' ? (
-            <>
-              No account?{' '}
-              <a onClick={() => switchMode('register')} style={{ cursor: 'pointer' }}>
-                Register
-              </a>
-            </>
+        <div className="auth-footer">
+          {step === 'staff' ? (
+            <button type="button" className="btn link" onClick={() => go('identify')}>
+              ← Student sign-in
+            </button>
           ) : (
-            <>
-              Have an account?{' '}
-              <a onClick={() => switchMode('login')} style={{ cursor: 'pointer' }}>
-                Log in
-              </a>
-            </>
+            <button type="button" className="btn link" onClick={() => go('staff')}>
+              Staff sign-in
+            </button>
           )}
-        </p>
+        </div>
       </div>
+      <p className="auth-credit">An IGDA IIIT-Delhi event</p>
     </div>
   )
 }

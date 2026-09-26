@@ -10,7 +10,7 @@ import {
   updateDeck,
   validateDeck,
 } from '../api/endpoints'
-import { colorIdentityOf, colorSwatches, swatchBg } from '../lib/colors'
+import { colorIdentityOf, colorSwatches, swatchBg, swatchFg } from '../lib/colors'
 import { CardArt } from '../lib/scryfall'
 import type { CardDto, CollectionEntryDto, DeckCardDto, DeckDto, DeckProblemDto } from '../api/types'
 
@@ -421,7 +421,7 @@ export default function DeckBuilderPage() {
                       <span
                         key={c}
                         className="swatch"
-                        style={{ background: swatchBg(c), color: c === 'C' ? 'var(--muted)' : '#0f1220' }}
+                        style={{ background: swatchBg(c), color: swatchFg(c) }}
                       >
                         {c}
                       </span>

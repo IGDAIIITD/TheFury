@@ -6,12 +6,13 @@ const COLOR_NAMES: Record<string, string> = {
   G: 'Green',
 }
 
+// Same palette as the --mana-* tokens in index.css.
 const COLOR_ABBR: Record<string, string> = {
-  W: '#f5f0d8',
-  U: '#4aa8ff',
-  B: '#8b90b5',
-  R: '#ff5d73',
-  G: '#3ddc97',
+  W: '#efe3bd',
+  U: '#2f6fb3',
+  B: '#3d3235',
+  R: '#c9302c',
+  G: '#2f7d3a',
 }
 
 export function colorIdentityOf(colors: string | null): string {
@@ -33,5 +34,10 @@ export function colorSwatches(colors: string | null): string[] {
 }
 
 export function swatchBg(letter: string): string {
-  return COLOR_ABBR[letter] ?? '#8b90b5'
+  return COLOR_ABBR[letter] ?? '#a1968a'
+}
+
+/** Readable text color on a swatch: dark on white/colorless, white on the rest. */
+export function swatchFg(letter: string): string {
+  return letter === 'W' || !COLOR_ABBR[letter] ? '#3b2a12' : '#fff'
 }

@@ -1,18 +1,17 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { supabase } from '../api/supabaseClient'
+import { registerRoll, rollEmail } from '../api/rollAuth'
 import type { Player } from '../api/types'
 
 interface AuthContextValue {
   player: Player | null
   token: string | null
+  /** Email + password: staff and older email accounts. */
   login: (email: string, password: string) => Promise<void>
-  register: (
-    email: string,
-    password: string,
-    displayName: string,
-    degreeLevel: string,
-    specialization: string,
-  ) => Promise<void>
+  /** Students: roll number + password. */
+  loginWithRoll: (rollNo: string, password: string) => Promise<void>
+  /** First sign-in for a roll number verified against the roster. */
+  registerWithRoll: (rollNo: string, firstName: string, password: string) => Promise<void>
   refreshPlayer: () => Promise<Player>
   logout: () => void
 }
@@ -90,46 +89,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [persist],
   )
 
-  const register = useCallback(
-    async (
-      email: string,
-      password: string,
-      displayName: string,
-      degreeLevel: string,
-      specialization: string,
-    ) => {
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: { display_name: displayName, degree_level: degreeLevel, specialization: specialization },
-        },
-      })
-      if (error) throw error
+  const loginWithRoll = useCallback(
+    (rollNo: string, password: string) => login(rollEmail(rollNo), password),
+    [login],
+  )
 
-      let session = data.session
-      if (!session) {
-        // Email confirmation is enabled on the project. Try an immediate sign-in
-        // (works only when confirmation is off); otherwise tell the user.
-        const { data: signIn, error: signInError } = await supabase.auth.signInWithPassword({ email, password })
-        if (signInError || !signIn.session) {
-          throw new Error('Check your email to confirm your account, then sign in.')
-        }
-        session = signIn.session
-      }
-
-      const uid = session.user.id
-      // The auth trigger only copies display_name; persist the cohort fields.
-      const { error: cohortError } = await supabase
-        .from('profiles')
-        .update({ degree_level: degreeLevel, specialization })
-        .eq('id', uid)
-      if (cohortError) throw cohortError
-
-      const next = await fetchProfile()
-      persist(session.access_token, next)
+  // The student-auth Edge Function creates the account from the roster (name, cohort,
+  // roll); signing in right after picks up the new session.
+  const registerWithRoll = useCallback(
+    async (rollNo: string, firstName: string, password: string) => {
+      const email = await registerRoll(rollNo, firstName, password)
+      await login(email, password)
     },
-    [persist],
+    [login],
   )
 
   const refreshPlayer = useCallback(async () => {
@@ -144,6 +116,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [persist])
 
   useEffect(() => {
+    // Dev UI previews (?mock, see pages/battleFixture.ts) run on a stored fake player.
+    if (import.meta.env.DEV && new URLSearchParams(window.location.search).has('mock')) return
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_OUT' || !session) {
         persist(null, null)
@@ -160,8 +134,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [persist])
 
   const value = useMemo(
-    () => ({ player, token, login, register, refreshPlayer, logout }),
-    [player, token, login, register, refreshPlayer, logout],
+    () => ({ player, token, login, loginWithRoll, registerWithRoll, refreshPlayer, logout }),
+    [player, token, login, loginWithRoll, registerWithRoll, refreshPlayer, logout],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

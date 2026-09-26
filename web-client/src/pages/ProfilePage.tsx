@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { getMyStats } from '../api/endpoints'
 import { useAuth } from '../auth/AuthContext'
 import { CACHE_KEYS, cacheGet, cacheSet } from '../lib/idb'
-import { swatchBg } from '../lib/colors'
+import { swatchBg, swatchFg } from '../lib/colors'
 import type { ProfileStatsDto } from '../api/types'
 
 const COLOR_LABELS: Record<string, string> = {
@@ -151,7 +151,7 @@ export default function ProfilePage() {
           <h3>Favorite colors</h3>
           <div className="fav-colors">
             {stats.favoriteColors.map((c) => (
-              <span key={c} className="swatch lg" style={{ background: swatchBg(c), color: '#0f1220' }}>
+              <span key={c} className="swatch lg" style={{ background: swatchBg(c), color: swatchFg(c) }}>
                 {c}
               </span>
             ))}

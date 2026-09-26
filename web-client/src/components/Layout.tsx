@@ -1,6 +1,7 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import OnboardingModal from './OnboardingModal'
+import logo from '../assets/igda-iiitd-logo.png'
 import { battleEngineConfigured } from '../api/battleConfig'
 
 const TABS = [
@@ -72,7 +73,10 @@ export default function Layout() {
   return (
     <>
       <nav className="navbar">
-        <span className="brand">Campus Forge</span>
+        <span className="brand">
+          <img src={logo} alt="IGDA IIIT-Delhi" />
+          <span className="brand-title">The Fury</span>
+        </span>
         {tabs.map((tab) => (
           <NavLink key={tab.to} to={tab.to} className="nav-link">
             {tab.label}

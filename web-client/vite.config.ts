@@ -52,11 +52,11 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['icons/icon-192.png', 'icons/icon-512.png'],
       manifest: {
-        name: 'Campus Forge',
-        short_name: 'Campus Forge',
-        description: 'Campus-wide collectible MTG game',
-        theme_color: '#0f1220',
-        background_color: '#0f1220',
+        name: 'The Fury · IGDA IIITD',
+        short_name: 'The Fury',
+        description: 'The Fury: IGDA IIITD campus collectible card game',
+        theme_color: '#b3202b',
+        background_color: '#eadcc5',
         display: 'standalone',
         start_url: 'collection',
         icons: [
