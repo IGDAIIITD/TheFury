@@ -10,6 +10,9 @@ import {
   isImmediateChoice,
   primaryActionLabel,
   manaList,
+  manaSourceColors,
+  availableMana,
+  healthSegments,
   MANA_EMOJI,
   renderManaCost,
   describeManaCost,
@@ -423,5 +426,44 @@ describe('manaAbility flag', () => {
   it('does not mark casts as manaAbility', () => {
     const m = matchOptionToCard('play', 'Raging Goblin - Summon creature, haste', pools)
     expect(m.manaAbility).toBeFalsy()
+  })
+})
+
+describe('manaSourceColors / availableMana', () => {
+  it('reads basic lands by name and other sources from their rules text', () => {
+    expect(manaSourceColors(card(1, 'Mountain'))).toEqual(['R'])
+    expect(manaSourceColors(card(2, 'Cinder Barrens', { text: '{T}: Add {B} or {R}.' }))).toEqual(['B', 'R'])
+    expect(manaSourceColors(card(3, 'Llanowar Elves', { text: '{T}: Add {G}.' }))).toEqual(['G'])
+    expect(manaSourceColors(card(4, 'Manalith', { text: '{T}: Add one mana of any color.' }))).toEqual(['W', 'U', 'B', 'R', 'G'])
+    expect(manaSourceColors(card(5, 'Grizzly Bears', { text: '' }))).toEqual([])
+  })
+
+  it('counts untapped sources plus floating mana; tapped sources do not count', () => {
+    const board = [
+      card(1, 'Mountain'),
+      card(2, 'Mountain', { tapped: true }),
+      card(3, 'Forest'),
+      card(4, 'Cinder Barrens', { text: '{T}: Add {B} or {R}.' }),
+      card(5, 'Grizzly Bears'),
+    ]
+    const m = availableMana(board, { U: 1 })
+    expect(m.byColor).toEqual({ W: 0, U: 1, B: 1, R: 2, G: 1, C: 0 })
+    expect(m.floating).toBe(1)
+    expect(m.total).toBe(4)
+  })
+
+  it('is all zeros for an empty board', () => {
+    expect(availableMana(undefined, null)).toEqual({ byColor: { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 }, floating: 0, total: 0 })
+  })
+})
+
+describe('healthSegments', () => {
+  it('lights one of 20 segments per life point', () => {
+    expect(healthSegments(20)).toEqual({ filled: 20, total: 20, overflow: 0 })
+    expect(healthSegments(7)).toEqual({ filled: 7, total: 20, overflow: 0 })
+  })
+  it('clamps at zero and reports life gain above 20 as overflow', () => {
+    expect(healthSegments(-3)).toEqual({ filled: 0, total: 20, overflow: 0 })
+    expect(healthSegments(24)).toEqual({ filled: 20, total: 20, overflow: 4 })
   })
 })

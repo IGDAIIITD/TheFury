@@ -12,9 +12,11 @@ import {
 import { battleWsUrl, battleToken } from '../api/battleConfig'
 import { listDecks } from '../api/endpoints'
 import { useAuth } from '../auth/AuthContext'
-import type { MatchDto, MatchState, PendingChoice, MatchPlayerState } from '../api/battleTypes'
+import type { CardEntry, MatchDto, MatchState, PendingChoice, MatchPlayerState } from '../api/battleTypes'
 import type { DeckDto } from '../api/types'
 import BattleCard from '../components/BattleCard'
+import { scryfallArtUrl } from '../lib/scryfall'
+import { mockMatch, mockState } from './battleFixture'
 import {
   friendlyPhase,
   phaseStrip,
@@ -24,7 +26,10 @@ import {
   isImmediateChoice,
   primaryActionLabel,
   isInCombatPhase,
-  manaList,
+  availableMana,
+  healthSegments,
+  MANA_COLORS,
+  MANA_NAMES,
 } from './battleUi'
 import type { BattleInstruction, MatchZone, OptionMatch } from './battleUi'
 
@@ -52,52 +57,65 @@ function LifePill({ delta }: { delta: number }) {
   )
 }
 
-function HealthBar({ life, maxLife = 20 }: { life: number; maxLife?: number }) {
-  const pct = Math.max(0, Math.min(100, (life / maxLife) * 100))
-  const color = pct > 60 ? 'var(--good)' : pct > 30 ? '#f0ad4e' : 'var(--bad)'
+const isLand = (card: CardEntry) => /\bland\b/i.test(card.type ?? '')
+
+/** A battlefield: lands in a compact row under the other permanents. */
+function Battlefield({ cards, render }: { cards: CardEntry[]; render: (c: CardEntry) => React.ReactNode }) {
+  const lands = cards.filter(isLand)
+  const others = cards.filter((c) => !isLand(c))
   return (
-    <div className="health-bar-vertical">
-      <span className="health-bar-number" style={{ color }}>{life}</span>
-      <div className="health-bar-track">
-        <div
-          className="health-bar-fill"
-          style={{ height: `${pct}%`, background: color }}
-        />
+    <>
+      {others.length > 0 && <div className="battle-grid">{others.map(render)}</div>}
+      {lands.length > 0 && <div className="battle-lands">{lands.map(render)}</div>}
+    </>
+  )
+}
+
+/** Horizontal life bar: one solid segment per life point out of 20. */
+export function HealthBar({ life }: { life: number }) {
+  const { filled, total, overflow } = healthSegments(life)
+  const tone = filled <= 5 ? 'critical' : filled <= 10 ? 'hurt' : 'healthy'
+  return (
+    <div className={`health-bar ${tone}`} role="meter" aria-label="Life" aria-valuenow={life} aria-valuemin={0} aria-valuemax={total}>
+      <div className="health-bar-segments">
+        {Array.from({ length: total }, (_, i) => (
+          <span key={i} className={`health-seg${i < filled ? ' on' : ''}`} />
+        ))}
       </div>
-      <span className="health-bar-label">HP</span>
+      <span className="health-bar-number">
+        {life}
+        {overflow > 0 && <small> (+{overflow})</small>}
+      </span>
     </div>
   )
 }
 
-function ManaBars({ pool }: { pool: Record<string, number> | null | undefined }) {
-  const pips = manaList(pool)
-  if (pool == null || pips.length === 0) return null
-  const maxCount = Math.max(...pips.map((p) => p.count), 1)
-  const colorMap: Record<string, string> = {
-    W: '#f9faf4',
-    U: '#0e68ab',
-    B: '#2b2a2e',
-    R: '#d3202a',
-    G: '#00733e',
-    C: '#9ca3af',
-  }
+/** Mana you can spend right now, per color: untapped sources + floating mana. */
+export function ManaPanel({
+  battlefield,
+  pool,
+}: {
+  battlefield: MatchPlayerState['battlefield'] | undefined
+  pool: Record<string, number> | null | undefined
+}) {
+  const mana = availableMana(battlefield, pool)
   return (
-    <div className="mana-bars" aria-label="Mana pool">
-      {pips.map((p) => (
-        <div key={p.color} className="mana-bar-row">
-          <span className="mana-bar-icon" aria-hidden>{p.emoji}</span>
-          <div className="mana-bar-track">
-            <div
-              className="mana-bar-fill"
-              style={{
-                width: `${(p.count / maxCount) * 100}%`,
-                background: colorMap[p.color] ?? '#9ca3af',
-              }}
-            />
-          </div>
-          <span className="mana-bar-count">{p.count}</span>
-        </div>
+    <div className="mana-panel" aria-label={`Mana available: ${mana.total}`}>
+      {MANA_COLORS.map((c) => (
+        <span
+          key={c}
+          className={`mana-orb mana-${c}${mana.byColor[c] === 0 ? ' empty' : ''}`}
+          title={`${MANA_NAMES[c]}: ${mana.byColor[c]}`}
+          aria-label={`${MANA_NAMES[c]} ${mana.byColor[c]}`}
+        >
+          <span className="mana-orb-letter" aria-hidden>{c}</span>
+          <span className="mana-orb-count">{mana.byColor[c]}</span>
+        </span>
       ))}
+      <span className="mana-total">
+        {mana.total} mana
+        {mana.floating > 0 && <em> · {mana.floating} floating</em>}
+      </span>
     </div>
   )
 }
@@ -140,28 +158,27 @@ function InstructionBanner({ instruction }: { instruction: BattleInstruction }) 
   )
 }
 
-function OpponentRow({
-  opponent,
+/** Name, life bar and available mana for one player (opponent on top, you below). */
+function PlayerStrip({
+  player,
   lifeDelta,
+  mine,
 }: {
-  opponent: MatchPlayerState
+  player: MatchPlayerState
   lifeDelta?: number
+  mine?: boolean
 }) {
   return (
-    <div className="panel opponent-row">
-      <div className="opponent-content">
-        <HealthBar life={opponent.life} />
-        <div className="opponent-info">
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-            <span className="opponent-name">{opponent.name}</span>
-            {lifeDelta !== undefined && <LifePill delta={lifeDelta} />}
-          </div>
-          <span className="opponent-meta">
-            Hand {opponent.handSize} · Library {opponent.librarySize} · Graveyard {opponent.graveyard?.length ?? 0}
-          </span>
-          <ManaBars pool={opponent.mana} />
-        </div>
+    <div className={`panel player-strip${mine ? ' mine' : ''}`}>
+      <div className="player-strip-head">
+        <span className="player-strip-name">{mine ? `${player.name} (you)` : player.name}</span>
+        {lifeDelta !== undefined && <LifePill delta={lifeDelta} />}
+        <span className="player-strip-meta">
+          {mine ? '' : `Hand ${player.handSize} · `}Library {player.librarySize} · Graveyard {player.graveyard?.length ?? 0}
+        </span>
       </div>
+      <HealthBar life={player.life} />
+      <ManaPanel battlefield={player.battlefield} pool={player.mana} />
     </div>
   )
 }
@@ -251,6 +268,9 @@ function engineMessage(err: unknown): string | null {
   return typeof message === 'string' && message.trim() ? message : null
 }
 
+/** Dev only: /battle?mock renders a canned board (no engine); stripped from production builds. */
+const MOCK = import.meta.env.DEV && new URLSearchParams(window.location.search).has('mock')
+
 export default function BattlePage() {
   const { player } = useAuth()
   const [matches, setMatches] = useState<MatchDto[]>([])
@@ -258,8 +278,8 @@ export default function BattlePage() {
   const [selectedDeckId, setSelectedDeckId] = useState('')
   const [joinCode, setJoinCode] = useState('')
   const [busy, setBusy] = useState(false)
-  const [activeMatch, setActiveMatch] = useState<MatchDto | null>(null)
-  const [gameState, setGameState] = useState<MatchState | null>(null)
+  const [activeMatch, setActiveMatch] = useState<MatchDto | null>(MOCK ? mockMatch() : null)
+  const [gameState, setGameState] = useState<MatchState | null>(MOCK ? mockState() : null)
   const [info, setInfo] = useState('')
   const [notice, setNotice] = useState('')
   const [aiEnabled, setAiEnabled] = useState(false)
@@ -268,7 +288,8 @@ export default function BattlePage() {
   const [events, setEvents] = useState<GameEvent[]>([])
   const [lifeDeltas, setLifeDeltas] = useState<Record<number, { delta: number }>>({})
   const [selected, setSelected] = useState<Set<number>>(new Set())
-  const [showArt, setShowArt] = useState(() => localStorage.getItem('cf_card_display') === 'art')
+  const [showArt, setShowArt] = useState(() => localStorage.getItem('cf_card_display') !== 'text')
+  const [inspecting, setInspecting] = useState<string | null>(null)
   const eventSeq = useRef(0)
   const prevStateRef = useRef<MatchState | null>(null)
   const resumingRef = useRef(false)
@@ -285,13 +306,13 @@ export default function BattlePage() {
   }, [])
 
   const myIndex = (() => {
-    if (!activeMatch || !player) return 0
+    if (!activeMatch || !player || MOCK) return 0
     return activeMatch.player1Id === player.id ? 0 : 1
   })()
 
   // WebSocket connection + catch-up fetch for reconnect
   useEffect(() => {
-    if (!activeMatch || !player) return
+    if (!activeMatch || !player || MOCK) return
 
     let cancelled = false
     let stompClient: Client | null = null
@@ -340,7 +361,7 @@ export default function BattlePage() {
   // connection and re-sync the board from REST instead of waiting on the
   // STOMP reconnectDelay (which only ticks while the page is alive).
   useEffect(() => {
-    if (!activeMatch) return
+    if (!activeMatch || MOCK) return
 
     const resume = () => {
       if (resumingRef.current) return
@@ -680,7 +701,9 @@ export default function BattlePage() {
           disabled={!!choice && !interactive}
           emphasis={emphasis}
           showArt={showArt}
+          small={zone !== 'hand' && isLand(card)}
           onClick={() => onTapCard(zone, card.id)}
+          onInspect={() => setInspecting(card.name)}
         />
       )
     }
@@ -751,11 +774,11 @@ export default function BattlePage() {
 
         <InstructionBanner instruction={instruction} />
 
-        <OpponentRow opponent={opponent} lifeDelta={lifeDeltas[opponent?.index ?? 1]?.delta} />
+        <PlayerStrip player={opponent} lifeDelta={lifeDeltas[opponent?.index ?? 1]?.delta} />
 
         <div className="panel battle-zone" id="opponent-battlefield">
           <div className="battle-zone-head">
-            <h3>Your Opponent's Battlefield</h3>
+            <h3>Opponent's Battlefield</h3>
             <span className="chip">{opponent.battlefield.length} permanents</span>
           </div>
           {opponent.battlefield.length === 0 ? (
@@ -763,21 +786,8 @@ export default function BattlePage() {
               Nothing on the battlefield yet.
             </div>
           ) : (
-            <div className="battle-grid">{opponent.battlefield.map((c) => renderTile('opponent', c))}</div>
+            <Battlefield cards={opponent.battlefield} render={(c) => renderTile('opponent', c)} />
           )}
-        </div>
-
-        <div className="panel player-stats-panel">
-          <HealthBar life={me?.life ?? 0} />
-          <div className="player-stats-info">
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-              <span className="player-stats-name">{me?.name ?? 'You'}</span>
-              {lifeDeltas[me?.index ?? 0] && (
-                <LifePill delta={lifeDeltas[me!.index].delta} />
-              )}
-            </div>
-            <ManaBars pool={me?.mana} />
-          </div>
         </div>
 
         <div className="panel battle-zone">
@@ -790,7 +800,7 @@ export default function BattlePage() {
               Nothing on the battlefield yet.
             </div>
           ) : (
-            <div className="battle-grid">{me?.battlefield.map((c) => renderTile('battlefield', c))}</div>
+            <Battlefield cards={me?.battlefield ?? []} render={(c) => renderTile('battlefield', c)} />
           )}
         </div>
 
@@ -805,6 +815,8 @@ export default function BattlePage() {
           </div>
         )}
 
+        {me && <PlayerStrip player={me} lifeDelta={lifeDeltas[me.index]?.delta} mine />}
+
         <div className="panel battle-zone">
           <div className="battle-zone-head">
             <h3>Your Hand</h3>
@@ -815,7 +827,7 @@ export default function BattlePage() {
               Hand empty.
             </div>
           ) : (
-            <div className="battle-hand">{me?.hand.map((c) => renderTile('hand', c))}</div>
+            <div className="battle-hand" aria-label="Your hand">{me?.hand.map((c) => renderTile('hand', c))}</div>
           )}
         </div>
 
@@ -847,6 +859,13 @@ export default function BattlePage() {
             )}
           </div>
         </details>
+
+        {inspecting && (
+          <div className="card-inspect" onClick={() => setInspecting(null)} role="dialog" aria-label={inspecting}>
+            <img src={scryfallArtUrl(inspecting)} alt={inspecting} />
+            <span className="card-inspect-hint">Tap anywhere to close</span>
+          </div>
+        )}
 
         {over && (
           <div

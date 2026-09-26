@@ -82,6 +82,98 @@ export const MANA_EMOJI: Record<string, string> = {
   C: '⬜',
 }
 
+export const MANA_COLORS = ['W', 'U', 'B', 'R', 'G', 'C'] as const
+export type ManaColor = (typeof MANA_COLORS)[number]
+
+export const MANA_NAMES: Record<ManaColor, string> = {
+  W: 'White',
+  U: 'Blue',
+  B: 'Black',
+  R: 'Red',
+  G: 'Green',
+  C: 'Colorless',
+}
+
+const BASIC_LAND_COLOR: Record<string, ManaColor> = {
+  plains: 'W',
+  island: 'U',
+  swamp: 'B',
+  mountain: 'R',
+  forest: 'G',
+  wastes: 'C',
+}
+
+/**
+ * Colors a permanent can tap for: basic lands by name, anything else from its
+ * rules text ("{T}: Add {R} or {G}."). Empty for permanents that don't make mana.
+ */
+export function manaSourceColors(card: CardEntry): ManaColor[] {
+  const basic = BASIC_LAND_COLOR[card.name.trim().toLowerCase()]
+  if (basic) return [basic]
+  const text = card.text ?? ''
+  const m = /\{T\}[^:]*:\s*Add ([^.]*)/i.exec(text)
+  if (!m) return []
+  if (/one mana of any color/i.test(m[1])) return ['W', 'U', 'B', 'R', 'G']
+  const found = new Set<ManaColor>()
+  for (const sym of m[1].matchAll(/\{([WUBRGC])\}/g)) found.add(sym[1] as ManaColor)
+  return MANA_COLORS.filter((c) => found.has(c))
+}
+
+export interface ManaAvailability {
+  /** Per color: floating mana + untapped sources that can make it. */
+  byColor: Record<ManaColor, number>
+  /** Floating mana in the pool right now. */
+  floating: number
+  /** Mana you could spend this step: floating + one per untapped source. */
+  total: number
+}
+
+/**
+ * What the player can spend right now. Mana is paid by auto-tapping, so the pool is
+ * usually empty; the useful number is untapped sources plus anything floating. A dual
+ * land counts toward both of its colors but only once toward the total.
+ */
+export function availableMana(
+  battlefield: CardEntry[] | null | undefined,
+  pool: Record<string, number> | null | undefined,
+): ManaAvailability {
+  const byColor = { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 } as Record<ManaColor, number>
+  let floating = 0
+  for (const c of MANA_COLORS) {
+    const n = pool?.[c] ?? 0
+    byColor[c] += n
+    floating += n
+  }
+  let sources = 0
+  for (const card of battlefield ?? []) {
+    if (card.tapped) continue
+    const colors = manaSourceColors(card)
+    if (colors.length === 0) continue
+    sources += 1
+    for (const c of colors) byColor[c] += 1
+  }
+  return { byColor, floating, total: floating + sources }
+}
+
+export const STARTING_LIFE = 20
+
+export interface HealthSegments {
+  /** Always STARTING_LIFE segments; `filled` of them are lit. */
+  filled: number
+  total: number
+  /** Life above the starting total (life gain), shown as "+N". */
+  overflow: number
+}
+
+export function healthSegments(life: number, total = STARTING_LIFE): HealthSegments {
+  const safe = Number.isFinite(life) ? Math.trunc(life) : 0
+  return {
+    filled: Math.max(0, Math.min(total, safe)),
+    total,
+    overflow: Math.max(0, safe - total),
+  }
+}
+
 /** Non-zero mana pool entries as { color, count, emoji } pairs (W/U/B/R/G/C order). */
 export function manaList(pool: Record<string, number> | null | undefined): {
   color: string
