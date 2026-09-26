@@ -72,10 +72,6 @@ export async function getOutgoingTrades(): Promise<TradeDto[]> {
   return (data as TradeDto[]) ?? []
 }
 
-export async function getTrade(tradeId: string): Promise<TradeDto> {
-  return findTrade(tradeId)
-}
-
 export async function acceptTrade(tradeId: string): Promise<TradeDto> {
   const { error } = await supabase.rpc('accept_trade', { p_trade: tradeId })
   if (error) throw toError(error, 'Could not accept trade')

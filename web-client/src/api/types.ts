@@ -11,12 +11,6 @@ export interface Player {
   level: number
 }
 
-export interface AuthResponse {
-  token: string
-  tokenType: string
-  player: Player
-}
-
 export type OwnershipType = 'UNLIMITED' | 'UNLOCK' | 'UNIQUE'
 
 export interface CardDto {
@@ -47,19 +41,6 @@ export interface CollectionEntryDto {
   favorite: boolean
 }
 
-export interface CollectionResponse {
-  entries: CollectionEntryDto[]
-  totalCount: number
-}
-
-export interface DiscoverResultDto {
-  card: CardDto
-  unlocked: boolean
-  alreadyOwned: boolean
-  discoveryCount: number
-  experienceAwarded: number
-}
-
 export interface DeckCardDto {
   cardId: string
   forgeName: string
@@ -76,10 +57,6 @@ export interface DeckDto {
   updatedAt: string
 }
 
-export interface DeckListResponse {
-  decks: DeckDto[]
-}
-
 export interface DeckProblemDto {
   code: string
   message: string
@@ -89,12 +66,6 @@ export interface DeckProblemDto {
 export interface DeckValidationResult {
   valid: boolean
   problems: DeckProblemDto[]
-}
-
-export interface ApiError {
-  status: number
-  message: string
-  details: DeckProblemDto[] | null
 }
 
 /** Why a scan granted nothing new (null when it did grant a copy). */
@@ -193,8 +164,6 @@ export interface LeaderboardResponse {
   myRank: number | null
 }
 
-export type TradeSide = 'OFFERED' | 'REQUESTED'
-
 export type TradeStatus = 'PENDING' | 'ACCEPTED' | 'DECLINED' | 'CANCELLED' | 'EXPIRED'
 
 export interface UniqueCardDto {
@@ -254,8 +223,6 @@ export interface PlayerSummaryDto {
   degreeLevel: string | null
   specialization: string | null
 }
-
-export type EventStatus = 'active' | 'upcoming' | 'ended'
 
 export interface EventDto {
   id: string

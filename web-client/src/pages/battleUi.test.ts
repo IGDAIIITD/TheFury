@@ -9,7 +9,6 @@ import {
   interactiveZones,
   isImmediateChoice,
   primaryActionLabel,
-  manaList,
   manaSourceColors,
   availableMana,
   healthSegments,
@@ -303,25 +302,7 @@ describe('isImmediateChoice / primaryActionLabel', () => {
   })
 })
 
-describe('manaList', () => {
-  it('returns nothing for a missing or empty pool', () => {
-    expect(manaList(undefined)).toEqual([])
-    expect(manaList(null)).toEqual([])
-    expect(manaList({})).toEqual([])
-    expect(manaList({ W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 })).toEqual([])
-  })
-
-  it('filters zeros and keeps W/U/B/R/G/C order with emoji pips', () => {
-    expect(manaList({ W: 2, R: 3 })).toEqual([
-      { color: 'W', count: 2, emoji: '⚪' },
-      { color: 'R', count: 3, emoji: '🔴' },
-    ])
-    expect(manaList({ G: 1, C: 4, U: 0 })).toEqual([
-      { color: 'G', count: 1, emoji: '🟢' },
-      { color: 'C', count: 4, emoji: '⬜' },
-    ])
-  })
-
+describe('MANA_EMOJI', () => {
   it('uses emoji pips, not braces or hearts, for every color', () => {
     for (const color of ['W', 'U', 'B', 'R', 'G', 'C']) {
       expect(MANA_EMOJI[color]).toBeTruthy()

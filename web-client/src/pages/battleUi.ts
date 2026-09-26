@@ -174,22 +174,6 @@ export function healthSegments(life: number, total = STARTING_LIFE): HealthSegme
   }
 }
 
-/** Non-zero mana pool entries as { color, count, emoji } pairs (W/U/B/R/G/C order). */
-export function manaList(pool: Record<string, number> | null | undefined): {
-  color: string
-  count: number
-  emoji: string
-}[] {
-  if (!pool) return []
-  const order = ['W', 'U', 'B', 'R', 'G', 'C']
-  const out: { color: string; count: number; emoji: string }[] = []
-  for (const color of order) {
-    const count = pool[color] ?? 0
-    if (count > 0) out.push({ color, count, emoji: MANA_EMOJI[color] ?? color })
-  }
-  return out
-}
-
 /** Phases where instant-speed spells (Giant Growth, Shock, etc.) may be cast. */
 const INSTANT_ALLOWED_PHASES = new Set([
   'COMBAT_BEGIN',
@@ -202,12 +186,6 @@ const INSTANT_ALLOWED_PHASES = new Set([
 
 export function isInCombatPhase(phase: string | null | undefined): boolean {
   return !!phase && INSTANT_ALLOWED_PHASES.has(phase)
-}
-
-/** Returns true if the option label describes an instant-speed spell (not an activated ability). */
-export function isInstantSpellLabel(label: string): boolean {
-  const lower = label.toLowerCase()
-  return lower.includes('— instant') || lower.includes(' - instant')
 }
 
 /** Human-readable mana cost description for title tooltips. */

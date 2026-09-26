@@ -21,12 +21,6 @@ export function colorIdentityOf(colors: string | null): string {
   return letters.map((c) => COLOR_NAMES[c] ?? c).join(' ')
 }
 
-export function colorAbbr(colors: string | null): string {
-  const letters = colors ? colors.replace(/\s/g, '').split('').filter((c) => c !== '') : []
-  if (letters.length === 0) return 'C'
-  return letters.join('')
-}
-
 export function colorSwatches(colors: string | null): string[] {
   const letters = colors ? colors.replace(/\s/g, '').split('').filter((c) => c !== '') : []
   if (letters.length === 0) return ['C']

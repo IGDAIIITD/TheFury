@@ -12,17 +12,14 @@ export function scryfallArtUrl(name: string): string {
 }
 
 /**
- * Renders card art with hidden-on-error fallback. Grids of many cards keep the
- * default lazy loading; always-visible boards (battle) pass loading="eager".
+ * Renders card art (lazy-loaded) with a hidden-on-error fallback.
  */
 export function CardArt({
   name,
   className,
-  loading = 'lazy',
 }: {
   name: string
   className?: string
-  loading?: 'lazy' | 'eager'
 }) {
   const [error, setError] = useState(false)
   if (error) return null
@@ -31,7 +28,7 @@ export function CardArt({
       className={className ?? 'card-art'}
       src={scryfallArtUrl(name)}
       alt={name}
-      loading={loading}
+      loading="lazy"
       draggable={false}
       onError={() => setError(true)}
     />
