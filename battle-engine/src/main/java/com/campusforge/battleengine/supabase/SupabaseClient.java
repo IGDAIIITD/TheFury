@@ -16,6 +16,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -293,6 +294,17 @@ public class SupabaseClient {
         body.put("player2_id", player2Id.toString());
         body.put("deck2_id", deck2Id.toString());
         body.put("status", "ACTIVE");
+        return patchMatch(matchId, body, "&status=eq.WAITING");
+    }
+
+    /**
+     * Closes a lobby nobody joined: status EXPIRED (timed out) or CANCELLED (host left).
+     * Conditional on WAITING, so it can never undo a join that just won the race.
+     */
+    public Optional<SupabaseMatch> closeLobby(UUID matchId, String status) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("status", status);
+        body.put("ended_at", Instant.now().toString());
         return patchMatch(matchId, body, "&status=eq.WAITING");
     }
 

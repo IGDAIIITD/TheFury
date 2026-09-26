@@ -338,6 +338,9 @@ public class ForgeMatchSession implements Consumer<Map<String, Object>> {
             Map<String, Object> o = new LinkedHashMap<>();
             o.put("label", option.getLabel());
             o.put("value", option.getValue());
+            if (option.getCardId() != null) {
+                o.put("cardId", option.getCardId());
+            }
             options.add(o);
         }
         m.put("options", options);

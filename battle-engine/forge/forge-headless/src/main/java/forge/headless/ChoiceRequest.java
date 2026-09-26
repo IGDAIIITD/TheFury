@@ -41,13 +41,21 @@ public class ChoiceRequest {
     public static class ChoiceOption {
         private final String label;
         private final String value;
+        /** Id of the card this option is about (the card itself, or a spell's host), if any. */
+        private final Integer cardId;
 
         public ChoiceOption(String label, String value) {
+            this(label, value, null);
+        }
+
+        public ChoiceOption(String label, String value, Integer cardId) {
             this.label = label;
             this.value = value;
+            this.cardId = cardId;
         }
 
         public String getLabel() { return label; }
         public String getValue() { return value; }
+        public Integer getCardId() { return cardId; }
     }
 }

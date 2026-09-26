@@ -10,7 +10,7 @@
 #   start      start the task and wait until battles are live
 #   stop       stop the task, kill engine + tunnel, clear the published URL
 #   restart    stop + start
-#   update     stop, rebuild the engine jar (mvn clean package, runs tests), start
+#   update     stop, re-sync forge-headless (setup-forge.ps1), rebuild the engine jar (mvn clean package, runs tests), start
 #   status     task state, processes, published URL and whether it answers
 #   logs       show the last lines of the supervisor / engine / tunnel logs
 #   uninstall  stop and remove the scheduled task
@@ -207,6 +207,11 @@ switch ($Action) {
         $mvn = Find-Exe 'mvn.cmd' @("$env:LOCALAPPDATA\Temp\opencode\apache-maven-3.9.9\bin\mvn.cmd")
         if (-not $mvn) { Bad 'Maven not found (put mvn on PATH)'; exit 1 }
         Stop-Backend
+        # Re-sync + install the vendored forge-headless module first (battle-engine\forge\forge-headless),
+        # so engine builds never compile against a stale copy in .m2. Idempotent; reuses the checkout.
+        Say "`nSyncing forge-headless with $mvn ..." 'Cyan'
+        & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $here 'setup-forge.ps1') -Mvn $mvn
+        if ($LASTEXITCODE -ne 0) { Bad 'forge-headless build failed; engine left stopped'; exit 1 }
         Say "`nBuilding with $mvn ..." 'Cyan'
         Push-Location $here
         # repo-local Maven repository: same forge-headless no matter which Windows account runs this

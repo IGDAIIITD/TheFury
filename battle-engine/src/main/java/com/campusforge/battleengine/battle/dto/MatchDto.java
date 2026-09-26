@@ -7,8 +7,8 @@ import java.util.UUID;
 /**
  * Battle-engine MatchDto. Status vocabulary mirrors the Supabase matches column:
  * WAITING/PENDING → PENDING, ACTIVE → ACTIVE, FINISHED/COMPLETED → COMPLETED,
- * CONCEDED → CONCEDED, so the web client typing ({@code 'PENDING' | 'ACTIVE' |
- * 'COMPLETED' | 'CONCEDED'}) stays unchanged.
+ * CONCEDED → CONCEDED, EXPIRED (lobby nobody joined in time) → EXPIRED, CANCELLED (host left
+ * the lobby) → CANCELLED.
  */
 public record MatchDto(
         UUID id,
@@ -47,6 +47,8 @@ public record MatchDto(
             case "ACTIVE" -> "ACTIVE";
             case "FINISHED", "COMPLETED" -> "COMPLETED";
             case "CONCEDED" -> "CONCEDED";
+            case "EXPIRED" -> "EXPIRED";
+            case "CANCELLED" -> "CANCELLED";
             default -> "PENDING";
         };
     }

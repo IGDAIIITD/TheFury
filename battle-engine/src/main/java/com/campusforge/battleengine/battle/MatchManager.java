@@ -6,6 +6,7 @@ import com.campusforge.battleengine.supabase.SupabaseClient.SupabaseDeck;
 import com.campusforge.battleengine.supabase.SupabaseClient.SupabaseEvent;
 import com.campusforge.battleengine.supabase.SupabaseClient.SupabaseMatch;
 import com.campusforge.battleengine.battle.dto.MatchDto;
+import com.campusforge.battleengine.security.MatchSeatAccess;
 import forge.headless.TestDecks;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,10 +35,12 @@ import java.util.concurrent.TimeUnit;
  * {@code validate_deck} / {@code record_match_result} RPCs.
  */
 @Service
-public class MatchManager {
+public class MatchManager implements MatchSeatAccess {
 
     private static final Logger log = LoggerFactory.getLogger(MatchManager.class);
     private static final long DISCONNECT_GRACE_SECONDS = 60;
+    /** A lobby nobody joins within this time is closed (EXPIRED). The web client shows the same countdown. */
+    static final long LOBBY_TTL_SECONDS = 120;
     private static final String CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
     private static final int CODE_LENGTH = 6;
 
@@ -102,7 +105,41 @@ public class MatchManager {
                 "WAITING", null, null, generateUniqueBattleCode(),
                 event != null ? event.id() : null, Instant.now().toString(), null))
                 .orElseThrow(() -> new IllegalStateException("Could not create lobby"));
+        scheduler.schedule(() -> expireLobby(row.id()), LOBBY_TTL_SECONDS, TimeUnit.SECONDS);
         return MatchDto.from(row);
+    }
+
+    /** Closes a lobby that is still waiting after {@link #LOBBY_TTL_SECONDS}. No-op once joined. */
+    void expireLobby(UUID matchId) {
+        supabase.closeLobby(matchId, "EXPIRED")
+                .ifPresent(m -> log.info("Lobby {} expired: nobody joined within {}s", matchId, LOBBY_TTL_SECONDS));
+    }
+
+    /** The host leaves their own lobby before anyone joined. */
+    public void cancelLobby(UUID matchId, UUID playerId) {
+        SupabaseMatch match = supabase.findMatch(matchId)
+                .orElseThrow(() -> new com.campusforge.battleengine.common.ResourceNotFoundException("Match not found: " + matchId));
+        if (!match.player1Id().equals(playerId)) {
+            throw new IllegalArgumentException("Only the host can close this lobby");
+        }
+        if ("WAITING".equals(match.status())) {
+            supabase.closeLobby(matchId, "CANCELLED");
+        }
+    }
+
+    /** The match row, with a stale WAITING lobby closed first (the engine may have restarted and lost its timer). */
+    public SupabaseMatch refreshLobby(SupabaseMatch match) {
+        if ("WAITING".equals(match.status()) && isLobbyStale(match)) {
+            expireLobby(match.id());
+            return supabase.findMatch(match.id()).orElse(match);
+        }
+        return match;
+    }
+
+    /** Lobbies older than the TTL are closed even if the engine restarted and lost its timer. */
+    private boolean isLobbyStale(SupabaseMatch match) {
+        Instant created = toInstant(match.createdAt());
+        return created != null && created.plusSeconds(LOBBY_TTL_SECONDS).isBefore(Instant.now());
     }
 
     /** Joins a pending battle by code, making it active and starting the game. */
@@ -122,6 +159,10 @@ public class MatchManager {
                 return MatchDto.from(match);
             }
             throw new IllegalStateException("Battle is no longer open");
+        }
+        if (isLobbyStale(match)) {
+            expireLobby(match.id());
+            throw new IllegalStateException("This battle lobby expired");
         }
         SupabaseDeck d2 = requireOwnedDeck(deck2Id, player2Id, "Deck is invalid for battle", match.eventId());
 
@@ -265,13 +306,42 @@ public class MatchManager {
         }
     }
 
+    // ------------------------------------------------------------------
+    // Seat access (STOMP SUBSCRIBE authorization + reconnect)
+    // ------------------------------------------------------------------
+
+    @Override
+    public boolean canWatchSeat(UUID matchId, int index, UUID playerId) {
+        if (index != 0 && index != 1) {
+            return false;
+        }
+        ForgeMatchSession session = activeMatches.get(matchId);
+        if (session != null) {
+            return playerId.equals(session.getPlayerIdForIndex(index));
+        }
+        // Not running (waiting lobby, finished game, or the engine restarted): the match row decides.
+        return supabase.findMatch(matchId)
+                .map(m -> playerId.equals(index == 0 ? m.player1Id() : m.player2Id()))
+                .orElse(false);
+    }
+
+    @Override
+    public void onSeatSubscribed(UUID matchId, UUID playerId) {
+        ForgeMatchSession session = activeMatches.get(matchId);
+        if (session != null) {
+            // Watching again counts as being back: cancels the disconnect grace-period concede.
+            session.onPlayerActivity(playerId);
+        }
+    }
+
     /** Maps a WebSocket disconnect back to the matches/players that session was watching. */
     @EventListener
     public void onSessionDisconnect(SessionDisconnectEvent event) {
         for (com.campusforge.battleengine.security.SupabaseStompAuthChannelInterceptor.Subscription subscription
                 : stompAuthChannelInterceptor.subscriptionsFor(event.getSessionId())) {
             ForgeMatchSession session = activeMatches.get(subscription.matchId());
-            if (session != null) {
+            // A reload can open the new socket before the old one closes: still connected.
+            if (session != null && !stompAuthChannelInterceptor.isSeatWatched(subscription.matchId(), subscription.playerIndex())) {
                 UUID playerId = session.getPlayerIdForIndex(subscription.playerIndex());
                 if (playerId != null) {
                     reportDisconnect(subscription.matchId(), playerId);

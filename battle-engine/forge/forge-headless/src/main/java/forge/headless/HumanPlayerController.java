@@ -569,11 +569,25 @@ public class HumanPlayerController extends PlayerControllerAi {
                                       List<T> items, Function<T, String> labelFn, boolean cancellable) {
         List<ChoiceRequest.ChoiceOption> options = new ArrayList<>();
         for (int i = 0; i < items.size(); i++) {
-            options.add(new ChoiceRequest.ChoiceOption(labelFn.apply(items.get(i)), String.valueOf(i)));
+            options.add(new ChoiceRequest.ChoiceOption(labelFn.apply(items.get(i)), String.valueOf(i), cardIdOf(items.get(i))));
         }
         ChoiceRequest req = new ChoiceRequest(requestSeq.incrementAndGet(), type, prompt, cancellable,
                 min, Math.max(min, max), options);
         return await(req);
+    }
+
+    /**
+     * The card an option refers to, so clients can tell identical cards apart (two
+     * "Elvish Warrior" attackers have the same label). Null for players, modes, etc.
+     */
+    private static Integer cardIdOf(Object item) {
+        if (item instanceof Card card) {
+            return card.getId();
+        }
+        if (item instanceof SpellAbility sa && sa.getHostCard() != null) {
+            return sa.getHostCard().getId();
+        }
+        return null;
     }
 
     private CardCollection mapToCards(CardCollectionView source, Choice c) {

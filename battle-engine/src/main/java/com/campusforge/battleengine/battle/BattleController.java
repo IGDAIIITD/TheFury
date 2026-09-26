@@ -91,8 +91,8 @@ public class BattleController {
             @PathVariable UUID matchId) {
         Map<String, Object> state = matchManager.getState(matchId, principal.playerId());
         if (state == null) {
-            var match = supabase.findMatch(matchId)
-                    .orElseThrow(() -> new com.campusforge.battleengine.common.ResourceNotFoundException("Match not found: " + matchId));
+            var match = matchManager.refreshLobby(supabase.findMatch(matchId)
+                    .orElseThrow(() -> new com.campusforge.battleengine.common.ResourceNotFoundException("Match not found: " + matchId)));
             boolean terminal = "COMPLETED".equals(MatchDto.from(match).status())
                     || "CONCEDED".equals(MatchDto.from(match).status());
             Map<String, Object> body = new LinkedHashMap<>();
@@ -106,9 +106,19 @@ public class BattleController {
                 body.put("winnerName", winnerName);
             }
             body.put("battleCode", match.battleCode() != null ? match.battleCode() : null);
+            body.put("createdAt", match.createdAt());
             return ResponseEntity.ok(body);
         }
         return ResponseEntity.ok(state);
+    }
+
+    /** Host closes their own waiting lobby (it disappears from the open-battles feed). */
+    @PostMapping("/matches/{matchId}/cancel")
+    public ResponseEntity<Void> cancelLobby(
+            @AuthenticationPrincipal BattleIdentity principal,
+            @PathVariable UUID matchId) {
+        matchManager.cancelLobby(matchId, principal.playerId());
+        return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/matches/{matchId}/concede")
