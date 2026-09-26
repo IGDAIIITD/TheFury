@@ -310,6 +310,40 @@ console.log('\n# battle-engine RPCs (service role)')
   check('match logged for both players', ml.map((x) => x.res).join() === 'LOSS,WIN', JSON.stringify(ml))
   r = await as(db, 'authenticated', alice, `select * from public.popular_decks(10)`)
   check('popular_decks aggregates across all players (definer)', r.ok && r.rows.length === 1 && Number(r.rows[0].play_count) === 2, JSON.stringify(r.rows))
+
+  // open-battle feed, campus history, personal history (migration 20)
+  const fresh = crypto.randomUUID()
+  const stale = crypto.randomUUID()
+  const cancelled = crypto.randomUUID()
+  await q(`insert into public.matches (id, player1_id, deck1_id, status, battle_code, created_at) values
+           ($1, $4, $5, 'WAITING', 'FRESH1', now() - interval '30 seconds'),
+           ($2, $4, $5, 'WAITING', 'STALE1', now() - interval '5 minutes'),
+           ($3, $4, $5, 'CANCELLED', 'GONE01', now())`, [fresh, stale, cancelled, alice, aliceDeck])
+  r = await as(db, 'anon', null, `select * from public.open_lobbies()`)
+  check('anon cannot list open lobbies', !r.ok, r.error)
+  r = await as(db, 'authenticated', bob, `select battle_code, host_name, mine, expires_at > now() as live from public.open_lobbies()`)
+  check('open_lobbies: only WAITING lobbies under 2 minutes, with host name and code', r.ok && r.rows.length === 1 && r.rows[0].battle_code === 'FRESH1' && r.rows[0].host_name.startsWith('Alice') && r.rows[0].mine === false && r.rows[0].live, JSON.stringify(r.rows ?? r.error))
+  r = await as(db, 'authenticated', alice, `select mine from public.open_lobbies()`)
+  check('open_lobbies marks your own lobby', r.ok && r.rows[0]?.mine === true, JSON.stringify(r.rows ?? r.error))
+
+  r = await as(db, 'authenticated', admin, `select winner_name, loser_name from public.recent_battles(10)`)
+  check('recent_battles: anyone signed in sees who beat whom', r.ok && r.rows.length === 1 && r.rows[0].winner_name === 'Bob' && r.rows[0].loser_name.startsWith('Alice'), JSON.stringify(r.rows ?? r.error))
+  const botMatch = crypto.randomUUID()
+  await q(`insert into public.matches (id, player1_id, deck1_id, status, winner_id, ended_at) values ($1, $2, $3, 'FINISHED', null, now())`, [botMatch, alice, aliceDeck])
+  r = await as(db, 'authenticated', admin, `select winner_name, loser_name from public.recent_battles(1)`)
+  check('recent_battles: a bot win reads "Campus Bot beat <player>"', r.ok && r.rows[0].winner_name === 'Campus Bot' && r.rows[0].loser_name.startsWith('Alice'), JSON.stringify(r.rows ?? r.error))
+
+  r = await as(db, 'authenticated', bob, `select match_id, result, xp from public.my_match_history(10)`)
+  const bobHist = r.rows ?? []
+  check('my_match_history: winner sees WON +50 XP', r.ok && bobHist.some((x) => x.match_id === matchId && x.result === 'WON' && Number(x.xp) === 50), JSON.stringify(bobHist))
+  check('my_match_history: only your own matches', bobHist.every((x) => x.match_id === matchId), JSON.stringify(bobHist))
+  r = await as(db, 'authenticated', alice, `select match_id, result, xp from public.my_match_history(20)`)
+  const byId = Object.fromEntries((r.rows ?? []).map((x) => [x.match_id, x]))
+  check('my_match_history: loser sees LOST +0 XP', byId[matchId]?.result === 'LOST' && Number(byId[matchId]?.xp) === 0, JSON.stringify(byId[matchId]))
+  check('my_match_history: stale waiting lobby reads EXPIRED, host-closed reads CANCELLED, fresh reads WAITING',
+    byId[stale]?.result === 'EXPIRED' && byId[cancelled]?.result === 'CANCELLED' && byId[fresh]?.result === 'WAITING', JSON.stringify([byId[stale], byId[cancelled], byId[fresh]]))
+  r = await as(db, 'anon', null, `select * from public.my_match_history(10)`)
+  check('anon cannot read match history', !r.ok, r.error)
 }
 
 console.log('\n# starter pack')

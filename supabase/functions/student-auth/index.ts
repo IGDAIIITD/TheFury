@@ -3,9 +3,10 @@
 // Auth:    none (called before the player has a session). Deploy with --no-verify-jwt.
 // Body:    { "action": "check",    "rollNo": "2026001", "firstName": "Aadi" }
 //            -> 200 { status: "NEW" | "REGISTERED", rollNo, name, program, degreeLevel, batch }
-//          { "action": "register", "rollNo": "2026001", "firstName": "Aadi", "password": "…" }
+//          { "action": "register", "rollNo": "2026001", "firstName": "Aadi", "password": "…",
+//            "nickname": "optional display name" }
 //            -> 201 { email }   (the client then signs in with email + password)
-// Errors:  400 bad input / weak password, 403 first name doesn't match, 404 roll not in the
+// Errors:  400 bad input / weak password / bad nickname, 403 first name doesn't match, 404 roll not in the
 //          roster, 409 roll already registered, 429 rate limited.
 //
 // The roster (`students`) and student_roll_status() are service-role only. Accounts are
@@ -22,6 +23,8 @@ const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 const ROLL_RE = /^[0-9]{7}$/;
 const MIN_PASSWORD = 8;
+// Optional display name chosen at sign-up (otherwise the roster name is shown).
+const NICKNAME_RE = /^[\p{L}\p{N}][\p{L}\p{N} ._'-]{1,23}$/u;
 
 // Best-effort per-IP limit (buckets live per isolate): slows down guessing first names.
 const WINDOW_MS = 60_000;
@@ -52,7 +55,7 @@ Deno.serve(async (req) => {
   const ip = (req.headers.get("x-forwarded-for") ?? "").split(",")[0].trim() || "unknown";
   if (rateLimited(ip)) return errorJson(429, "Too many attempts. Wait a minute and try again.");
 
-  let body: { action?: string; rollNo?: string; firstName?: string; password?: string };
+  let body: { action?: string; rollNo?: string; firstName?: string; password?: string; nickname?: string };
   try {
     body = await req.json();
   } catch {
@@ -82,6 +85,11 @@ Deno.serve(async (req) => {
     return errorJson(400, `Choose a password of at least ${MIN_PASSWORD} characters.`);
   }
 
+  const nickname = String(body.nickname ?? "").trim().replace(/\s+/g, " ");
+  if (nickname && !NICKNAME_RE.test(nickname)) {
+    return errorJson(400, "Nicknames are 2–24 letters, numbers, spaces or . _ ' -");
+  }
+
   const email = rollEmail(rollNo);
   const created = await admin.auth.admin.createUser({
     email,
@@ -107,6 +115,10 @@ Deno.serve(async (req) => {
     console.error("roll link missing for new user", userId);
     if (userId) await admin.auth.admin.deleteUser(userId);
     return errorJson(500, "Could not create the account. Try again.");
+  }
+  if (nickname) {
+    const { error: nickError } = await admin.from("profiles").update({ display_name: nickname }).eq("id", userId);
+    if (nickError) console.error("nickname update failed", nickError.message); // keep the roster name
   }
   return json(201, { email });
 });
