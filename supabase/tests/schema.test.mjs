@@ -341,4 +341,59 @@ console.log('\n# starter pack')
   check('starter grant logged once', sl[0].n === 1, JSON.stringify(sl))
 }
 
+console.log('\n# student roster + roll-number accounts')
+{
+  await q(`insert into public.students (roll_no, name, program, batch) values
+           ('2026001', 'Aadi Dhariwal', 'CSE', 2026), ('2026295', 'Mohd Rehan', 'ECE', 2026), ('2026777', 'Test Player', 'CSECON', 2026)
+           on conflict do nothing`)
+  let r = await as(db, 'anon', null, `select * from public.students`)
+  check('anon cannot read the roster', !r.ok, r.error)
+  r = await as(db, 'authenticated', bob, `select * from public.students`)
+  check('players cannot read the roster', r.ok && r.rows.length === 0, JSON.stringify(r.rows ?? r.error))
+  r = await as(db, 'authenticated', admin, `select count(*)::int as n from public.students`)
+  check('admins can read the roster', r.ok && r.rows[0].n === 3, JSON.stringify(r.rows ?? r.error))
+  for (const role of ['anon', 'authenticated']) {
+    r = await as(db, role, role === 'anon' ? null : bob, `select public.student_roll_status('2026001', 'Aadi')`)
+    check(`${role} cannot call student_roll_status`, !r.ok, r.error)
+  }
+  const status = async (roll, first) =>
+    (await as(db, 'service_role', null, `select public.student_roll_status($1, $2) as s`, [roll, first])).rows[0].s
+  check('unknown roll -> NOT_FOUND', (await status('9999999', 'Aadi')).status === 'NOT_FOUND')
+  const wrong = await status('2026001', 'Aarav')
+  check('wrong first name -> NAME_MISMATCH, no name leaked', wrong.status === 'NAME_MISMATCH' && !wrong.name, JSON.stringify(wrong))
+  const ok = await status(' 2026001 ', '  aadi ')
+  check('first name matches case-insensitively -> NEW with roster data', ok.status === 'NEW' && ok.name === 'Aadi Dhariwal' && ok.program === 'CSE', JSON.stringify(ok))
+  check('any word of the roster name matches ("Rehan" for "Mohd Rehan")', (await status('2026295', 'Rehan')).status === 'NEW')
+  check('single letters never match', (await status('2026295', 'R')).status === 'NAME_MISMATCH')
+
+  const squatter = await signUp(db, '2026001@roll.thefury.invalid', { roll_no: '2026001', display_name: 'Squatter' })
+  const sq = await q(`select roll_no, display_name from public.profiles where id = $1`, [squatter])
+  check('user metadata cannot claim a roll (public sign-up)', sq[0].roll_no === null && sq[0].display_name === 'Squatter', JSON.stringify(sq))
+  check('roll still NEW after the squat attempt', (await status('2026001', 'Aadi')).status === 'NEW')
+
+  const aadi = await signUp(db, '2026001@students.thefury', { display_name: 'ignored' }, { roll_no: '2026001' })
+  const p = (await q(`select display_name, degree_level, specialization, student_id, roll_no from public.profiles where id = $1`, [aadi]))[0]
+  check('roll sign-up fills the profile from the roster', p.display_name === 'Aadi Dhariwal' && p.degree_level === 'BTECH' && p.specialization === 'CSE' && p.student_id === '2026001' && p.roll_no === '2026001', JSON.stringify(p))
+  check('roll sign-up still gets the starter deck', (await q(`select count(*)::int as n from public.decks where player_id = $1`, [aadi]))[0].n === 1)
+  check('roll becomes REGISTERED', (await status('2026001', 'Aadi')).status === 'REGISTERED')
+  const econ = await signUp(db, '2026777@students.thefury', {}, { roll_no: '2026777' })
+  check('CSEcon roster entries map to the CSECON cohort', (await q(`select specialization from public.profiles where id = $1`, [econ]))[0].specialization === 'CSECON')
+  let dup = true
+  try { await signUp(db, 'other@students.thefury', {}, { roll_no: '2026001' }) } catch { dup = false }
+  check('a roll can only have one account', !dup)
+  const ghost = await signUp(db, 'ghost@students.thefury', {}, { roll_no: '1234567' })
+  check('unknown app_metadata roll is ignored, not linked', (await q(`select roll_no from public.profiles where id = $1`, [ghost]))[0].roll_no === null)
+
+  r = await as(db, 'authenticated', aadi, `update public.profiles set display_name = 'Aadi D' where id = $1`, [aadi])
+  check('roll players can still rename themselves', r.ok && r.affected === 1, r.error)
+  for (const [col, val] of [['roll_no', '2026295'], ['student_id', '2026999'], ['specialization', 'ECE']]) {
+    r = await as(db, 'authenticated', aadi, `update public.profiles set ${col} = $2 where id = $1`, [aadi, val])
+    check(`roll players cannot change ${col}`, !r.ok && r.code === '42501', r.error)
+  }
+  r = await as(db, 'authenticated', bob, `update public.profiles set roll_no = '2026295' where id = $1`, [bob])
+  check('email players cannot attach a roll', !r.ok && r.code === '42501', r.error)
+  r = await as(db, 'authenticated', bob, `update public.profiles set student_id = 'S-1' where id = $1`, [bob])
+  check('email players keep editing their student id', r.ok && r.affected === 1, r.error)
+}
+
 done()

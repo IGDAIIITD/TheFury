@@ -35,10 +35,13 @@ export async function boot({ upTo = null, seed = true, skip = [] } = {}) {
   return db
 }
 
-/** Sign up a user the way GoTrue does (insert into auth.users fires handle_new_user). */
-export async function signUp(db, email, meta = {}) {
+/**
+ * Sign up a user the way GoTrue does (insert into auth.users fires handle_new_user).
+ * `appMeta` is app_metadata, which only the admin API (service role) can set.
+ */
+export async function signUp(db, email, meta = {}, appMeta = {}) {
   const id = crypto.randomUUID()
-  await db.query(`insert into auth.users (id, email, raw_user_meta_data) values ($1, $2, $3)`, [id, email, meta])
+  await db.query(`insert into auth.users (id, email, raw_user_meta_data, raw_app_meta_data) values ($1, $2, $3, $4)`, [id, email, meta, appMeta])
   return id
 }
 

@@ -44,3 +44,6 @@ battle-engine/logs/
 
 # repo-local Maven repository (setup-forge.ps1 / battle-server.ps1 / .mvn/maven.config)
 battle-engine/.m2/
+
+# Legacy pre-Supabase backend + the student roster (personal data; lives in Supabase `students`)
+/backend/
