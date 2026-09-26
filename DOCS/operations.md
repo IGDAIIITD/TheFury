@@ -10,6 +10,7 @@ the campus PC.
 | Publishable (anon) key | `web-client/.env.development`, `deploy-web.yml` | the browser. **Public by design.** |
 | Service-role key | repo-root `.env` (gitignored), battle engine | engine, scripts. **Never ship it to a browser.** |
 | `QR_SIGNING_SECRET` | Supabase → Edge Functions → Secrets | `claim`, `qr-catalog`, `admin-spawn` |
+| Student roster source | `backend/student-catalog/` (gitignored) | `scripts/import-students.mjs` |
 | Personal access token (`sbp_…`) | root `.env` as `SUPABASE_ACCESS_TOKEN`, only while needed | Management API, function deploys |
 
 Create PATs at https://supabase.com/dashboard/account/tokens and revoke them when you're done.
@@ -47,6 +48,7 @@ the functions, and promote an admin.
 ```bash
 set -a; . ./.env; set +a
 supabase functions deploy claim qr-catalog admin-spawn --project-ref prjsiywvhxqnsvsmfgxm --use-api
+supabase functions deploy student-auth --no-verify-jwt --project-ref prjsiywvhxqnsvsmfgxm --use-api
 ```
 
 Smoke test: `curl -i -X POST https://prjsiywvhxqnsvsmfgxm.supabase.co/functions/v1/claim -H "apikey: <publishable key>" -d '{}'`
@@ -103,6 +105,26 @@ update public.profiles set role = 'ADMIN' where email = 'someone@example.com';
 ```
 
 (SQL Editor, or the admin console's Players tab once you're an admin.) Demote with `role = 'PLAYER'`.
+
+### Load or refresh the student roster
+
+The roster comes from the IIITD student list (an HTML table copied from the institute site). Parse it and
+upsert into `students` (service role; needs `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` in `.env`):
+
+```bash
+node scripts/import-students.mjs "backend/student-catalog/student list.txt" --upload
+```
+
+The script drops commented-out rows (students the site no longer lists), keeps the newest batch for students
+listed twice, title-cases all-caps names, and writes a clean `students.json` next to the input. Keep both
+files out of git (`backend/` is gitignored). Re-running is safe (upsert by roll number).
+
+### Reset a student's password
+
+Roll accounts have a synthetic email (`<roll>@students.thefury.app`), so recovery mail reaches nobody. Either
+set a new password for them (Dashboard → Authentication → Users → the user → reset password, if your dashboard
+offers it), or delete the user so the roll becomes NEW and the student registers again. Deleting also deletes
+their cards; they get a fresh starter deck.
 
 ### Ban / unban
 

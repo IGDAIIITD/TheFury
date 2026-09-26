@@ -4,6 +4,9 @@ Campus Forge is a campus-wide collectible Magic: The Gathering game. Players fin
 scan them with their phone to unlock cards, build decks, trade unique cards and battle each other with real
 Magic rules.
 
+Players see it as **The Fury**, an IGDA IIIT-Delhi event: that name and the IGDA logo are the UI branding.
+"Campus Forge" remains the project and code name (repo, packages, docs).
+
 | I want to… | Read |
 | --- | --- |
 | understand how the pieces fit together | [architecture.md](architecture.md) |

@@ -16,7 +16,7 @@ rest is callable only by the service role (Edge Functions, battle engine). See [
 
 | Table | Purpose | Players can | Written by |
 | --- | --- | --- | --- |
-| `profiles` | 1:1 with `auth.users`: display name, email, cohort, role, XP, level, ban | read & update **own** presentation fields* | signup trigger, game functions, admins |
+| `profiles` | 1:1 with `auth.users`: display name, email, cohort, `roll_no` (unique, roll accounts), role, XP, level, ban | read & update **own** presentation fields* | signup trigger, game functions, admins |
 | `cards` | card catalog (name, rarity, ownership type, `requires_unlock`, set, colors, types, …): `seed.sql` + `seed_sets/*.sql` | read (anyone) | admins / seed files |
 | `formats`, `card_legalities` | STANDARD / COMMANDER rules; per-card legality | read (anyone) | admins / seed |
 | `player_unlocks` | copies of UNLOCK cards a player owns (one row per copy, at most 4 per card) and unlocked scan-once UNLIMITED cards (one row = unlimited). `claim_id` = the code that granted it (unique per player × code) | read own | `apply_claim` |
@@ -32,9 +32,11 @@ rest is callable only by the service role (Edge Functions, battle engine). See [
 | `activity_feed` | last 50 public activity lines (UI ticker) | read (signed in) | game functions |
 | `game_log` | **durable, append-only history**: CLAIM, TRADE, MATCH, STARTER, SPAWN rows with XP and JSON detail | read own | game functions, `admin-spawn` |
 | `app_config` | public key/value runtime settings (`battle_engine_url`) | read (anyone) | service role, admins |
+| `students` | the IIITD roster: roll number, name, program, batch, degree. **Personal data** | nothing (admins read) | `scripts/import-students.mjs` (service role) |
 
 \* `profiles`: players may change `display_name` (1–40 chars), `avatar`, `student_id`, `degree_level` +
-`specialization` (must be a valid cohort), `onboarding_seen` and `last_login`. The `trg_profiles_guard` trigger
+`specialization` (must be a valid cohort), `onboarding_seen` and `last_login`. Roll accounts (`roll_no` set) keep
+the student id and cohort the roster gave them, and nobody but an admin can change `roll_no`. The `trg_profiles_guard` trigger
 rejects changes to `role`, `experience`, `banned`, `banned_at`, `email`, `id` or `created` unless the caller is
 an admin or a trusted server path. `level` is always recomputed from XP.
 
@@ -71,6 +73,8 @@ RLS policies and check constraints use them.
 | `record_match_result(match, winner, condition)` | battle engine | finish a match (idempotent), XP × bonus, feed, `game_log` rows |
 | `validate_deck(deck, event)` | battle engine | match-time deck check (ownership, copies, bans, size, event sets) |
 | `grant_starter_pack(player)` | signup trigger | build the starter deck once |
+| `student_roll_status(roll, first_name)` | `student-auth` Edge Function | NOT_FOUND / NAME_MISMATCH / NEW / REGISTERED (+ roster identity once the name matched) |
+| `student_name_matches(name, typed)` | internal | typed first name = any word of the roster name, letters only, case-insensitive |
 | `owned_copies(player, card)` | internal | **the ownership rule**, used by `apply_claim` and both deck validators: UNLIMITED → unlimited if free or unlocked (else 0); UNLOCK → copies (rows); UNIQUE → serials owned |
 | `add_feed_entry(...)`, `sweep_achievements(player)`, `card_print_core(card)`, `unique_physical_uuid(core)`, `assert_active_player(player)` | internal | helpers |
 
@@ -79,8 +83,10 @@ the Edge Functions map these to HTTP statuses.
 
 ### Triggers
 
-- `on_auth_user_created` → `handle_new_user`: creates the profile (display name from signup metadata or the
-  email, a valid cohort if one was given) and calls `grant_starter_pack`. Failures in the pack never block signup.
+- `on_auth_user_created` → `handle_new_user`: creates the profile and calls `grant_starter_pack` (failures in
+  the pack never block signup). Roll accounts (`app_metadata.roll_no`, set only by `student-auth` via the admin
+  API) get name, cohort, student id and `roll_no` from `students`; other accounts use the display name from
+  signup metadata (or the email) and a valid cohort if one was given.
 - `trg_profiles_guard`, `trg_profiles_sync_level`: protect profile fields; derive the level.
 - `trg_feed_prune`: keeps `activity_feed` at 50 rows.
 
@@ -117,6 +123,7 @@ service role (`scripts/download-card-art.ps1`).
 | 15 | `app_config` | public runtime settings + realtime |
 | 16 | `multi_copy_unlocks` | up to 4 copies of an UNLOCK card, one per distinct code; one unique serial per player via scanning |
 | 17 | `scan_to_unlock_unlimited` | `cards.requires_unlock`: UNLIMITED cards other than the base 15 unlock (unlimited copies) on the first scan; `owned_copies()`; ownership-aware stats/leaderboard |
+| 18 | `student_roster` | `students` roster, `profiles.roll_no`, `student_roll_status()`, roster-filled roll sign-ups, guard for roll/student id/cohort |
 
 **Rules for new migrations**
 

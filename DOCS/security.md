@@ -28,8 +28,14 @@ callable with the public key.
 **Actor from the token, never a parameter.** Client RPCs use `auth.uid()` and reject NULL.
 `my_profile_stats(p)` refuses other players (it returns email) unless the caller is an admin.
 
-**Profile guard.** A trigger blocks players from changing `role`, `experience`, `banned`, `email` and similar
-fields; `level` is always derived from XP.
+**Profile guard.** A trigger blocks players from changing `role`, `experience`, `banned`, `email`, `roll_no` and
+similar fields; roll accounts also can't change their student id or cohort. `level` is always derived from XP.
+
+**Student roster and roll sign-in.** `students` (names and roll numbers from the IIITD student list) is
+personal data: RLS with an admin-only read policy, no player grants, and it is **not in git** (the source list
+and the parsed JSON stay in the gitignored `backend/student-catalog/`). The `student-auth` function reveals a
+roll's name only after the first name matched, and a roll can be claimed only through the admin API
+(`app_metadata.roll_no`), never by a public sign-up.
 
 **Game invariants in the database.** Claims lock the claim row; trades lock the trade and all involved cards in
 sorted-UUID order (no deadlocks) and re-check ownership; match results are idempotent and the winner must be a
@@ -65,6 +71,13 @@ starter grant and spawn with XP and details. Use it for audits.
   player token.
 - `search_players` matches on email substrings (without returning email), which can confirm that an address
   has an account.
+- Roll sign-in proves only that you know a roll number and the matching first name, which classmates also
+  know: whoever registers a roll first owns it. If a student reports their roll was taken, an organiser deletes
+  that auth user (Dashboard → Authentication) so they can register again. First-name guessing is slowed by a
+  per-IP limit (20 tries a minute, best effort).
+- Public email sign-up is still open at the Auth level (anyone with the publishable key can create an email
+  account). Such accounts can never claim a roll. To close it, turn off "Allow new users to sign up"
+  (Dashboard → Authentication → Sign In / Providers); `student-auth` and the dashboard still create users.
 - Supabase Auth hardening (leaked-password protection, CAPTCHA, email confirmation) is not enabled; consider
   it before a campus-wide launch (Dashboard → Authentication).
 

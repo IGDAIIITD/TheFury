@@ -47,6 +47,25 @@ typed by hand.
 | 410 | token expired or revoked |
 | 429 | rate limited (`Retry-After` header) |
 
+## `student-auth` (public)
+
+`POST /functions/v1/student-auth`, no session needed (deployed with `--no-verify-jwt`; see
+`supabase/config.toml`). Powers the roll-number login.
+
+```json
+{ "action": "check", "rollNo": "2026001", "firstName": "Aadi" }
+{ "action": "register", "rollNo": "2026001", "firstName": "Aadi", "password": "at least 8 chars" }
+```
+
+- `check` → **200** `{ status: "NEW" | "REGISTERED", rollNo, name, program, degreeLevel, batch }`.
+- `register` → **201** `{ email }`; the client then signs in with that email and the password. The account is
+  created through the admin API with `app_metadata.roll_no` (which public sign-ups can't set), and
+  `handle_new_user` fills the profile from the roster.
+- Errors: 400 bad roll / short password, **403** first name doesn't match, **404** roll not in the roster,
+  **409** roll already registered, 429 more than 20 attempts a minute from one IP (best effort).
+
+Uses `student_roll_status()` (service role only); the roster is never exposed to the browser.
+
 ## `qr-catalog` (admin)
 
 - `GET /functions/v1/qr-catalog` → one entry per card, sorted by name:
@@ -81,10 +100,11 @@ entry to the feed and to `game_log`. Response: **201** with the created claims, 
 
 ```powershell
 deno test --allow-env supabase/functions/_shared/qr.test.ts      # sign/verify + parity with SQL card_print_core
-deno check supabase/functions/claim/index.ts supabase/functions/qr-catalog/index.ts supabase/functions/admin-spawn/index.ts
+deno check supabase/functions/claim/index.ts supabase/functions/qr-catalog/index.ts supabase/functions/admin-spawn/index.ts supabase/functions/student-auth/index.ts
 
 # deploy (needs SUPABASE_ACCESS_TOKEN; no Docker)
 supabase functions deploy claim qr-catalog admin-spawn --project-ref prjsiywvhxqnsvsmfgxm --use-api
+supabase functions deploy student-auth --no-verify-jwt --project-ref prjsiywvhxqnsvsmfgxm --use-api
 ```
 
 Set or rotate the secret in the dashboard (Edge Functions → Secrets) or with

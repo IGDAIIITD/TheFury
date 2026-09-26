@@ -8,7 +8,7 @@ origins.
 
 | Route | Page | Data |
 | --- | --- | --- |
-| `/login` | sign in / register (with cohort) | Supabase Auth |
+| `/login` | roll number + first name → password (see [Sign-in](#sign-in)); staff email sign-in | `student-auth` Edge Function, Supabase Auth |
 | `/collection` | catalog + owned cards, filters, favorites, discovery counts. Opens on **Owned**, shows the first 25 matches with a **See all** button | tables (own rows) |
 | `/collection/trades` | offer / accept / decline / cancel trades; live via Realtime | trade RPCs |
 | `/collection/events` | active and upcoming events + live activity feed | `events`, `activity_feed` (Realtime) |
@@ -20,6 +20,39 @@ origins.
 
 Everything except `/login` requires a session (`RequireAuth` in `App.tsx`). First-time players see an
 onboarding modal.
+
+## Sign-in
+
+Students sign in with their **IIITD roll number**, not an email:
+
+1. Enter roll number + first name. `student-auth` checks them against the private `students` roster
+   (any word of the roster name counts, case-insensitive).
+2. **Registered** roll: enter the password. **New** roll: the page shows the roster identity (name, program,
+   batch) and asks for a password (≥ 8 characters, typed twice). The function creates the account and the
+   page signs in. There is no registration form: name, cohort and student id come from the roster.
+
+Roll accounts are ordinary Supabase Auth users with the synthetic email `<roll>@students.thefury.app`
+(`api/rollAuth.ts`, same constant in `supabase/functions/_shared/roll.ts`); no mail is ever sent to it.
+"Staff sign-in" keeps email + password for organisers and older email accounts. Forgotten passwords are reset
+by an organiser ([operations.md](operations.md#reset-a-students-password)).
+
+## Look and feel
+
+The Fury branding (IGDA IIIT-Delhi logo in `src/assets/`, PWA icons in `public/icons/` cut from its emblem):
+a light parchment theme with red accents. All colors are CSS custom properties on `:root` in `index.css`
+(`--bg`, `--panel`, `--accent`, `--mana-W`…`--mana-C`, …); change the tokens, not individual rules.
+Headings use Cinzel, body text IBM Plex Sans (Google Fonts, loaded in `index.html`).
+
+**Battle board** (`pages/BattlePage.tsx`, logic in `pages/battleUi.ts`):
+
+- Cards show the whole printed image; live state (tapped, attacking/blocking, P/T, damage) is overlaid.
+  Lands sit in a compact row below the other permanents; the hand scrolls sideways. Long-press or right-click
+  a card to see it enlarged.
+- Each player strip has a **life bar of 20 segments**, one per life point (`healthSegments`; life above 20
+  shows as "+N"), and a **mana panel** with one orb per color: untapped mana sources + floating mana
+  (`availableMana`; sources are basic lands by name, anything else from its "{T}: Add …" text).
+- Working on the board without the engine: `npm run dev`, store a player in `localStorage.cf_player`, and open
+  `/battle?mock` (fixture in `pages/battleFixture.ts`; dev builds only, production drops it).
 
 ## Code layout
 
