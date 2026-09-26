@@ -204,7 +204,12 @@ switch ($Action) {
 
     'update' {
         # The running JVM locks target\*.jar, so stop first, then rebuild.
-        $mvn = Find-Exe 'mvn.cmd' @("$env:LOCALAPPDATA\Temp\opencode\apache-maven-3.9.9\bin\mvn.cmd")
+        # Maven is a per-user install too; the admin prompt's own LOCALAPPDATA doesn't have it.
+        $mvn = Find-Exe 'mvn.cmd' (@(
+                'C:\Users\student\AppData\Local\Temp\opencode\apache-maven-3.9.9\bin\mvn.cmd',
+                "$env:LOCALAPPDATA\Temp\opencode\apache-maven-3.9.9\bin\mvn.cmd"
+            ) + @(Get-ChildItem 'C:\Users\*\AppData\Local\Temp\opencode\apache-maven-*\bin\mvn.cmd' -ErrorAction SilentlyContinue |
+                    ForEach-Object { $_.FullName }))
         if (-not $mvn) { Bad 'Maven not found (put mvn on PATH)'; exit 1 }
         Stop-Backend
         # Re-sync + install the vendored forge-headless module first (battle-engine\forge\forge-headless),

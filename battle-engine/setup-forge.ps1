@@ -25,6 +25,27 @@ $ErrorActionPreference = 'Stop'
 $ForgeRepo = 'https://github.com/Card-Forge/forge.git'
 $ForgeCommit = 'fd8196a88a8173bd88c745de7578a41eac8cb2e1'
 
+# Git for Windows is installed per user on the host PC (C:\Users\student\...), and the elevated prompt
+# runs as a different account (IIITD) whose PATH doesn't have it: find git.exe and put it on this
+# process's PATH.
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+    $gitExe = @(
+        'C:\Users\student\AppData\Local\Programs\Git\cmd\git.exe',
+        "$env:ProgramFiles\Git\cmd\git.exe",
+        "${env:ProgramFiles(x86)}\Git\cmd\git.exe"
+    ) + @(Get-ChildItem 'C:\Users\*\AppData\Local\Programs\Git\cmd\git.exe' -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.FullName }) |
+        Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+    if (-not $gitExe) { throw 'git not found: install Git for Windows or put git.exe on PATH' }
+    $env:Path = "$(Split-Path -Parent $gitExe);$env:Path"
+}
+# The checkout belongs to whichever account created it; git refuses to work in a repository owned by
+# someone else ("dubious ownership"). Trust it for this script's git calls only (command-line-level
+# config, so no one's gitconfig changes).
+$env:GIT_CONFIG_COUNT = '1'
+$env:GIT_CONFIG_KEY_0 = 'safe.directory'
+$env:GIT_CONFIG_VALUE_0 = '*'
+
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $ForgeDir) { $ForgeDir = Join-Path (Split-Path -Parent $here) 'forge-engine' }
 $patch = Join-Path $here 'forge\campusforge-forge.patch'

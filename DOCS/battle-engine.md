@@ -213,6 +213,7 @@ framework errors keep their 4xx status. `MatchManagerJoinTest` covers the join r
 | `Forge resource dir not found` | Run from `battle-engine/` with `forge-engine/` next to it, or pass `-Dforge.res.dir=...`. |
 | `error: patch failed` in setup-forge | The checkout has CRLF endings; delete `forge-engine/` and re-run (the script pins `core.eol=lf`). |
 | `Filename too long` while cloning | Windows path limit; the script sets `core.longpaths` and a sparse checkout. Keep the repo path short. |
+| `git` (or Maven) "not recognized" in the admin prompt | Git and Maven are per-user installs under `student`; the elevated prompt runs as `IIITD`. `setup-forge.ps1` and `battle-server.ps1` now look them up by full path (and trust the Forge checkout for git despite the different owner). Pull and re-run. |
 | `mvn clean` fails: "Failed to delete …jar" | The engine is running and locks the jar. Use `battle-server.ps1 update`. |
 | Every call returns 401 | Expired or foreign token, or the engine couldn't fetch JWKS at startup (look for `Loaded N JWKS keys`). |
 | Browser: CORS error | Add the exact page origin to `CAMPUSFORGE_CORS_ALLOWED_ORIGINS` and restart. |
