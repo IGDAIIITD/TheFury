@@ -19,6 +19,13 @@
     />
     <script>
       window.global = window;
+      // Theme before first paint (see src/lib/theme.ts).
+      try {
+        if (localStorage.getItem('cf_theme') === 'dark') {
+          document.documentElement.dataset.theme = 'dark';
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#1d1611');
+        }
+      } catch (e) {}
     </script>
   </head>
   <body>

@@ -1,11 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { getActiveBuildings, getLeaderboard, getPopularDecks } from '../api/endpoints'
+import { getLeaderboard, getPopularDecks } from '../api/endpoints'
+import { Chip, FilterBar, FilterGroup } from '../components/Filters'
 import { useAuth } from '../auth/AuthContext'
 import { CACHE_KEYS, cacheGet, cacheSet } from '../lib/idb'
 import {
-  BTECH_SPECIALIZATIONS,
-  MTECH_SPECIALIZATIONS,
-  type BuildingActivityDto,
   type DegreeLevel,
   type LeaderboardFilters,
   type LeaderboardMetric,
@@ -32,48 +30,26 @@ const DEGREE_LABELS: Record<DegreeLevel, string> = {
   MTECH: 'M.Tech',
 }
 
-const SPECIALIZATIONS: Record<DegreeLevel, readonly string[]> = {
-  BTECH: [...BTECH_SPECIALIZATIONS],
-  MTECH: [...MTECH_SPECIALIZATIONS],
-}
-
-function scopeLabel(filters: LeaderboardFilters): string {
-  if (filters.department) return `dept:${filters.department}`
-  if (filters.degreeLevel && filters.specialization) {
-    return `${filters.degreeLevel}:${filters.specialization}`
-  }
-  if (filters.degreeLevel) return filters.degreeLevel
-  return 'all'
-}
+/** Individual branches (any degree). */
+const BRANCHES = ['CSE', 'CSAI', 'CSAM', 'CSB', 'CSSS', 'CSD', 'CSECON', 'ECE', 'EVE'] as const
 
 export default function LeaderboardPage() {
   const { player } = useAuth()
   const [metric, setMetric] = useState<LeaderboardMetric>('level')
-  const [degreeLevel, setDegreeLevel] = useState<DegreeLevel | ''>('')
-  const [specialization, setSpecialization] = useState('')
-  const [department, setDepartment] = useState<'' | 'CSE' | 'ECE'>('')
+  const [branch, setBranch] = useState('')
   const [data, setData] = useState<LeaderboardResponse | null>(null)
   const [decks, setDecks] = useState<PopularDeckDto[]>([])
-  const [buildings, setBuildings] = useState<BuildingActivityDto[]>([])
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
 
-  const filters: LeaderboardFilters = useMemo(() => {
-    if (department) return { department }
-    if (degreeLevel) {
-      const f: LeaderboardFilters = { degreeLevel }
-      if (specialization) f.specialization = specialization
-      return f
-    }
-    return {}
-  }, [degreeLevel, specialization, department])
+  const filters: LeaderboardFilters = useMemo(() => (branch ? { specialization: branch } : {}), [branch])
 
   useEffect(() => {
     let mounted = true
     const load = async () => {
       setLoading(true)
       setError('')
-      const cacheKey = CACHE_KEYS.leaderboard(metric, scopeLabel(filters))
+      const cacheKey = CACHE_KEYS.leaderboard(metric, branch || 'all')
       const cached = await cacheGet<LeaderboardResponse>(cacheKey)
       if (mounted && cached) setData(cached)
       try {
@@ -96,19 +72,13 @@ export default function LeaderboardPage() {
   useEffect(() => {
     let mounted = true
     const load = async () => {
-      const cached = await cacheGet<{ decks: PopularDeckDto[]; buildings: BuildingActivityDto[] }>(
-        CACHE_KEYS.campusPulse,
-      )
-      if (mounted && cached) {
-        setDecks(cached.decks)
-        setBuildings(cached.buildings)
-      }
+      const cached = await cacheGet<{ decks: PopularDeckDto[] }>(CACHE_KEYS.campusPulse)
+      if (mounted && cached?.decks) setDecks(cached.decks)
       try {
-        const [d, b] = await Promise.all([getPopularDecks(5), getActiveBuildings(5)])
+        const d = await getPopularDecks(5)
         if (!mounted) return
         setDecks(d)
-        setBuildings(b)
-        void cacheSet(CACHE_KEYS.campusPulse, { decks: d, buildings: b })
+        void cacheSet(CACHE_KEYS.campusPulse, { decks: d })
       } catch {
         // non-fatal: campus pulse stays empty or cached offline
       }
@@ -142,77 +112,25 @@ export default function LeaderboardPage() {
         {METRIC_SUBTITLES[metric]}
       </p>
 
-      <div className="filters">
-        {METRICS.map((m) => (
-          <span
-            key={m.key}
-            className={`chip ${metric === m.key ? 'active' : ''}`}
-            onClick={() => setMetric(m.key)}
-          >
-            {m.label}
-          </span>
-        ))}
-      </div>
-
-      <div className="filters" style={{ marginTop: 8 }}>
-        <span
-          className={`chip ${!department && !degreeLevel ? 'active' : ''}`}
-          onClick={() => {
-            setDegreeLevel('')
-            setSpecialization('')
-            setDepartment('')
-          }}
-        >
-          All
-        </span>
-        <span
-          className={`chip ${department === 'CSE' ? 'active' : ''}`}
-          onClick={() => {
-            setDegreeLevel('')
-            setSpecialization('')
-            setDepartment('CSE')
-          }}
-        >
-          CSE dept
-        </span>
-        <span
-          className={`chip ${department === 'ECE' ? 'active' : ''}`}
-          onClick={() => {
-            setDegreeLevel('')
-            setSpecialization('')
-            setDepartment('ECE')
-          }}
-        >
-          ECE dept
-        </span>
-        {(Object.keys(DEGREE_LABELS) as DegreeLevel[]).map((level) => (
-          <span
-            key={level}
-            className={`chip ${degreeLevel === level && !department ? 'active' : ''}`}
-            onClick={() => {
-              setDegreeLevel(degreeLevel === level ? '' : level)
-              setSpecialization('')
-              setDepartment('')
-            }}
-          >
-            {DEGREE_LABELS[level]}
-          </span>
-        ))}
-        {degreeLevel && !department && (
-          <>
-            <span style={{ width: 8 }} />
-            {SPECIALIZATIONS[degreeLevel].map((spec) => (
-              <span
-                key={spec}
-                className={`chip ${specialization === spec ? 'active' : ''}`}
-                onClick={() => setSpecialization(specialization === spec ? '' : spec)}
-              >
-                {spec}
-              </span>
-            ))}
-          </>
-        )}
-      </div>
+      <FilterBar>
+        <FilterGroup label="Rank by" tone="metric">
+          {METRICS.map((m) => (
+            <Chip key={m.key} active={metric === m.key} onClick={() => setMetric(m.key)}>
+              {m.label}
+            </Chip>
+          ))}
+        </FilterGroup>
+        <FilterGroup label="Branch" tone="branch">
+          <Chip active={!branch} onClick={() => setBranch('')}>
+            All
+          </Chip>
+          {BRANCHES.map((b) => (
+            <Chip key={b} active={branch === b} onClick={() => setBranch(branch === b ? '' : b)}>
+              {b}
+            </Chip>
+          ))}
+        </FilterGroup>
+      </FilterBar>
 
       {data?.myRank != null && data.myRank > 0 && (
         <div className="panel my-rank">
@@ -258,32 +176,17 @@ export default function LeaderboardPage() {
         })}
       </div>
 
-      {(decks.length > 0 || buildings.length > 0) && (
+      {decks.length > 0 && (
         <div className="campus-pulse">
-          <h3>Campus Pulse</h3>
-          <div className="pulse-grid">
-            <div className="panel">
-              <h4>Most-played decks</h4>
-              {decks.length === 0 && <p className="empty">No match data yet.</p>}
-              {decks.map((deck, i) => (
-                <div className="pulse-row" key={deck.deckName}>
-                  <span className="lb-rank">{i + 1}</span>
-                  <span className="grow">{deck.deckName}</span>
-                  <span className="meta">{deck.playCount} game{deck.playCount === 1 ? '' : 's'}</span>
-                </div>
-              ))}
-            </div>
-            <div className="panel">
-              <h4>Most active buildings</h4>
-              {buildings.length === 0 && <p className="empty">No spawn data yet.</p>}
-              {buildings.map((b, i) => (
-                <div className="pulse-row" key={b.building}>
-                  <span className="lb-rank">{i + 1}</span>
-                  <span className="grow">{b.building}</span>
-                  <span className="meta">{b.claimCount} claim{b.claimCount === 1 ? '' : 's'}</span>
-                </div>
-              ))}
-            </div>
+          <h3>Most-played decks</h3>
+          <div className="panel">
+            {decks.map((deck, i) => (
+              <div className="pulse-row" key={deck.deckName}>
+                <span className="lb-rank">{i + 1}</span>
+                <span className="grow">{deck.deckName}</span>
+                <span className="meta">{deck.playCount} game{deck.playCount === 1 ? '' : 's'}</span>
+              </div>
+            ))}
           </div>
         </div>
       )}

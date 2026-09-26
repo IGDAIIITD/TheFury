@@ -3,15 +3,16 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { checkRoll, ROLL_RE, type RollStatus } from '../api/rollAuth'
 import logo from '../assets/igda-iiitd-logo.png'
+import ThemeToggle from '../components/ThemeToggle'
 
 /**
  * Sign-in for The Fury.
  *   1. identify: roll number + first name, checked against the IIITD student roster
  *   2. password: log in (REGISTERED) or choose a password (NEW; the profile is filled
  *      from the roster, so there's nothing else to fill in)
- * Staff and older email accounts use the "Staff sign-in" link.
+ * Every account is a roll account; organisers are roll accounts promoted to admin.
  */
-type Step = 'identify' | 'password' | 'staff'
+type Step = 'identify' | 'password'
 
 const MIN_PASSWORD = 8
 
@@ -27,7 +28,7 @@ function errorText(err: unknown, fallback: string): string {
 }
 
 export default function LoginPage() {
-  const { login, loginWithRoll, registerWithRoll } = useAuth()
+  const { loginWithRoll, registerWithRoll } = useAuth()
   const navigate = useNavigate()
   const [step, setStep] = useState<Step>('identify')
   const [rollNo, setRollNo] = useState('')
@@ -35,7 +36,7 @@ export default function LoginPage() {
   const [student, setStudent] = useState<RollStatus | null>(null)
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
-  const [email, setEmail] = useState('')
+  const [nickname, setNickname] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -76,7 +77,7 @@ export default function LoginPage() {
       if (password.length < MIN_PASSWORD) return setError(`Use at least ${MIN_PASSWORD} characters.`)
       if (password !== confirm) return setError('The passwords do not match.')
       return run(async () => {
-        await registerWithRoll(student.rollNo, firstName.trim(), password)
+        await registerWithRoll(student.rollNo, firstName.trim(), password, nickname.trim() || undefined)
         navigate('/collection')
       }, 'Could not create your account.')
     }
@@ -86,23 +87,16 @@ export default function LoginPage() {
     }, 'Could not log in.')
   }
 
-  const staffLogin = (e: React.FormEvent) => {
-    e.preventDefault()
-    return run(async () => {
-      await login(email.trim(), password)
-      navigate('/collection')
-    }, 'Could not log in.')
-  }
-
   return (
     <div className="auth-page">
+      <div className="auth-theme">
+        <ThemeToggle />
+      </div>
       <div className="auth-card">
         <img className="auth-logo" src={logo} alt="IGDA IIIT-Delhi" />
         <h1>The Fury</h1>
         <p className="tagline">
-          {step === 'staff'
-            ? 'Staff sign-in'
-            : step === 'password' && student?.status === 'NEW'
+          {step === 'password' && student?.status === 'NEW'
               ? 'Choose a password to claim your deck.'
               : 'Scan. Build. Battle.'}
         </p>
@@ -161,6 +155,21 @@ export default function LoginPage() {
             </div>
             {student.status === 'NEW' && (
               <div className="field">
+                <label htmlFor="nickname">
+                  Nickname <span className="optional">optional</span>
+                </label>
+                <input
+                  id="nickname"
+                  value={nickname}
+                  onChange={(e) => setNickname(e.target.value)}
+                  maxLength={24}
+                  autoComplete="nickname"
+                  placeholder={`Shown instead of ${student.name.split(' ')[0]}`}
+                />
+              </div>
+            )}
+            {student.status === 'NEW' && (
+              <div className="field">
                 <label htmlFor="confirm">Confirm password</label>
                 <input
                   id="confirm"
@@ -186,48 +195,6 @@ export default function LoginPage() {
           </form>
         )}
 
-        {step === 'staff' && (
-          <form onSubmit={staffLogin}>
-            <div className="field">
-              <label htmlFor="email">Email</label>
-              <input
-                id="email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                autoComplete="username"
-                required
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="staff-password">Password</label>
-              <input
-                id="staff-password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete="current-password"
-                required
-              />
-            </div>
-            <div className="error" role="alert">{error}</div>
-            <button className="btn" style={{ width: '100%' }} disabled={busy}>
-              {busy ? 'Please wait…' : 'Log in'}
-            </button>
-          </form>
-        )}
-
-        <div className="auth-footer">
-          {step === 'staff' ? (
-            <button type="button" className="btn link" onClick={() => go('identify')}>
-              ← Student sign-in
-            </button>
-          ) : (
-            <button type="button" className="btn link" onClick={() => go('staff')}>
-              Staff sign-in
-            </button>
-          )}
-        </div>
       </div>
       <p className="auth-credit">An IGDA IIIT-Delhi event</p>
     </div>

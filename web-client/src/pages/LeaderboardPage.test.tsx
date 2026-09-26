@@ -13,14 +13,12 @@ vi.mock('../auth/AuthContext', () => ({
 vi.mock('../api/endpoints', () => ({
   getLeaderboard: vi.fn(),
   getPopularDecks: vi.fn(),
-  getActiveBuildings: vi.fn(),
 }))
 
 const mockedUseAuth = useAuth as unknown as ReturnType<typeof vi.fn>
 const mockedEndpoints = endpoints as {
   getLeaderboard: ReturnType<typeof vi.fn>
   getPopularDecks: ReturnType<typeof vi.fn>
-  getActiveBuildings: ReturnType<typeof vi.fn>
 }
 
 const response: LeaderboardResponse = {
@@ -61,7 +59,6 @@ beforeEach(() => {
     { deckName: 'RG Combat', playCount: 4 },
     { deckName: 'Burn', playCount: 2 },
   ])
-  mockedEndpoints.getActiveBuildings.mockResolvedValue([{ building: 'Block C', claimCount: 7 }])
 })
 
 test('renders ranked rows and highlights the current player', async () => {
@@ -85,41 +82,25 @@ test('switching metric reloads with the new metric and no cohort filter', async 
   await waitFor(() => expect(mockedEndpoints.getLeaderboard).toHaveBeenCalledWith('winrate', 50, {}))
 })
 
-test('selecting a degree level filters by it', async () => {
+test('selecting a branch filters by that specialization, any degree', async () => {
   render(<LeaderboardPage />)
   await screen.findByText('Opponent')
 
-  fireEvent.click(screen.getByText('B.Tech'))
+  fireEvent.click(screen.getByRole('button', { name: 'CSAI' }))
+  await waitFor(() => expect(mockedEndpoints.getLeaderboard).toHaveBeenCalledWith('level', 50, { specialization: 'CSAI' }))
 
-  await waitFor(() =>
-    expect(mockedEndpoints.getLeaderboard).toHaveBeenCalledWith('level', 50, { degreeLevel: 'BTECH' }),
-  )
+  fireEvent.click(screen.getByRole('button', { name: 'All' }))
+  await waitFor(() => expect(mockedEndpoints.getLeaderboard).toHaveBeenLastCalledWith('level', 50, {}))
 })
 
-test('selecting a specialization filters by degree level and specialization', async () => {
+test('offers every branch and no department or degree filters', async () => {
   render(<LeaderboardPage />)
   await screen.findByText('Opponent')
-
-  fireEvent.click(screen.getByText('B.Tech'))
-  fireEvent.click(screen.getByText('CSAI'))
-
-  await waitFor(() =>
-    expect(mockedEndpoints.getLeaderboard).toHaveBeenCalledWith('level', 50, {
-      degreeLevel: 'BTECH',
-      specialization: 'CSAI',
-    }),
-  )
-})
-
-test('selecting a department filters by it', async () => {
-  render(<LeaderboardPage />)
-  await screen.findByText('Opponent')
-
-  fireEvent.click(screen.getByText('CSE dept'))
-
-  await waitFor(() =>
-    expect(mockedEndpoints.getLeaderboard).toHaveBeenCalledWith('level', 50, { department: 'CSE' }),
-  )
+  for (const b of ['CSE', 'CSAI', 'CSAM', 'CSB', 'CSSS', 'CSD', 'CSECON', 'ECE', 'EVE']) {
+    expect(screen.getByRole('button', { name: b })).toBeInTheDocument()
+  }
+  expect(screen.queryByText('CSE dept')).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'B.Tech' })).not.toBeInTheDocument()
 })
 
 test('shows empty state when there are no rows', async () => {
@@ -138,14 +119,12 @@ test('shows error state when the fetch fails and no cache exists', async () => {
   expect(await screen.findByText('Failed to load leaderboard.')).toBeInTheDocument()
 })
 
-test('renders campus pulse analytics', async () => {
+test('shows most-played decks and no building activity', async () => {
   render(<LeaderboardPage />)
 
-  expect(await screen.findByText('Campus Pulse')).toBeInTheDocument()
+  expect(await screen.findByText('Most-played decks')).toBeInTheDocument()
   expect(screen.getByText('RG Combat')).toBeInTheDocument()
   expect(screen.getByText('4 games')).toBeInTheDocument()
-  expect(screen.getByText('Block C')).toBeInTheDocument()
-  expect(screen.getByText('7 claims')).toBeInTheDocument()
+  expect(screen.queryByText(/buildings/i)).not.toBeInTheDocument()
   expect(mockedEndpoints.getPopularDecks).toHaveBeenCalledWith(5)
-  expect(mockedEndpoints.getActiveBuildings).toHaveBeenCalledWith(5)
 })

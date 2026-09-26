@@ -8,15 +8,15 @@ origins.
 
 | Route | Page | Data |
 | --- | --- | --- |
-| `/login` | roll number + first name → password (see [Sign-in](#sign-in)); staff email sign-in | `student-auth` Edge Function, Supabase Auth |
+| `/login` | roll number + first name → password, optional nickname on first sign-in (see [Sign-in](#sign-in)) | `student-auth` Edge Function, Supabase Auth |
 | `/collection` | catalog + owned cards, filters, favorites, discovery counts. Opens on **Owned**, shows the first 25 matches with a **See all** button | tables (own rows) |
 | `/collection/trades` | offer / accept / decline / cancel trades; live via Realtime | trade RPCs |
-| `/collection/events` | active and upcoming events + live activity feed | `events`, `activity_feed` (Realtime) |
+| `/collection/events` | **Open battles** (lobbies waiting for an opponent, refreshed every 5 s; **Join** opens `/battle?join=CODE`) + **battle history** (who beat whom) | `open_lobbies()`, `recent_battles()` |
 | `/decks` | deck builder with server-side validation | `decks`, `deck_cards`, `validate_deck_spec` |
-| `/battle` | lobbies, join by code, the battle board | battle engine REST + WebSocket |
+| `/battle` | deck + join-by-code + create lobby, 2-minute lobby countdown, match history (result, XP, time), the battle board | battle engine REST + WebSocket, `my_match_history()` |
 | `/scan` | camera QR scanner (jsQR) + manual 12-character entry | `claim` Edge Function |
 | `/profile` | stats, badges, battle record | `my_profile_stats` |
-| `/leaderboard` | level / collection / win-rate rankings with cohort filters | `leaderboard_full` |
+| `/leaderboard` | level / collection / win-rate rankings, filter by branch (CSE … EVE); most-played decks | `leaderboard_full`, `popular_decks` |
 
 Everything except `/login` requires a session (`RequireAuth` in `App.tsx`). First-time players see an
 onboarding modal.
@@ -33,8 +33,9 @@ Students sign in with their **IIITD roll number**, not an email:
 
 Roll accounts are ordinary Supabase Auth users with the synthetic email `<roll>@students.thefury.app`
 (`api/rollAuth.ts`, same constant in `supabase/functions/_shared/roll.ts`); no mail is ever sent to it.
-"Staff sign-in" keeps email + password for organisers and older email accounts. Forgotten passwords are reset
-by an organiser ([operations.md](operations.md#reset-a-students-password)).
+A new student can also pick a **nickname** (2–24 characters), shown instead of their roster name. There is no
+email sign-in: public sign-up is disabled on the project and organisers are roll accounts promoted to admin.
+Forgotten passwords are reset by an organiser ([operations.md](operations.md#reset-a-students-password)).
 
 ## Look and feel
 
@@ -43,11 +44,28 @@ a light parchment theme with red accents. All colors are CSS custom properties o
 (`--bg`, `--panel`, `--accent`, `--mana-W`…`--mana-C`, …); change the tokens, not individual rules.
 Headings use Cinzel, body text IBM Plex Sans (Google Fonts, loaded in `index.html`).
 
+**Dark mode:** the sun/moon button (navbar, login page) switches to a dark-brown palette: the same tokens
+redefined under `:root[data-theme='dark']`. The choice is stored per device (`localStorage.cf_theme`, see
+`lib/theme.ts`) and applied by an inline script in `index.html` before first paint.
+
+**Filters** (`components/Filters.tsx`): `FilterBar` > `FilterGroup` (label + tone) > `Chip`. Groups are separated by
+vertical dividers (stacked on phones); each group has its own accent, color chips use the mana colors.
+
 **Battle board** (`pages/BattlePage.tsx`, logic in `pages/battleUi.ts`):
 
 - Cards show the whole printed image; live state (tapped, attacking/blocking, P/T, damage) is overlaid.
   Lands sit in a compact row below the other permanents; the hand scrolls sideways. Long-press or right-click
   a card to see it enlarged.
+- Cards on the board carry a **cost overlay**: a grey circle for generic mana and one colored dot per colored pip
+  (`manaCostSymbols`).
+- Choices map onto cards by the engine's `cardId` (so two identical creatures are two separate picks); older
+  engines fall back to names, giving same-name options one card each.
+- **No flicker:** the engine sends bursts of snapshots while it auto-passes steps. The client renders the first at
+  once and then at most one per 150 ms (game over immediately); decisions it passes by itself (`isAutoPass`: only
+  mana taps available) are shown as "waiting", and the action dock at the bottom stays mounted with a stable height.
+- **Reconnect:** the tab remembers its match (`localStorage.cf_active_match`) and rejoins after a reload; after
+  every (re)subscribe it re-fetches the state so a pending decision reappears. The lobby also offers **Rejoin**
+  for a battle in progress.
 - Each player strip has a **life bar of 20 segments**, one per life point (`healthSegments`; life above 20
   shows as "+N"), and a **mana panel** with one orb per color: untapped mana sources + floating mana
   (`availableMana`; sources are basic lands by name, anything else from its "{T}: Add …" text).

@@ -6,12 +6,10 @@ import type { Player } from '../api/types'
 interface AuthContextValue {
   player: Player | null
   token: string | null
-  /** Email + password: staff and older email accounts. */
-  login: (email: string, password: string) => Promise<void>
-  /** Students: roll number + password. */
+  /** Roll number + password (every account is a roll account; admins are promoted roll accounts). */
   loginWithRoll: (rollNo: string, password: string) => Promise<void>
-  /** First sign-in for a roll number verified against the roster. */
-  registerWithRoll: (rollNo: string, firstName: string, password: string) => Promise<void>
+  /** First sign-in for a roll number verified against the roster; nickname is optional. */
+  registerWithRoll: (rollNo: string, firstName: string, password: string, nickname?: string) => Promise<void>
   refreshPlayer: () => Promise<Player>
   logout: () => void
 }
@@ -97,8 +95,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // The student-auth Edge Function creates the account from the roster (name, cohort,
   // roll); signing in right after picks up the new session.
   const registerWithRoll = useCallback(
-    async (rollNo: string, firstName: string, password: string) => {
-      const email = await registerRoll(rollNo, firstName, password)
+    async (rollNo: string, firstName: string, password: string, nickname?: string) => {
+      const email = await registerRoll(rollNo, firstName, password, nickname)
       await login(email, password)
     },
     [login],
@@ -134,8 +132,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [persist])
 
   const value = useMemo(
-    () => ({ player, token, login, loginWithRoll, registerWithRoll, refreshPlayer, logout }),
-    [player, token, login, loginWithRoll, registerWithRoll, refreshPlayer, logout],
+    () => ({ player, token, loginWithRoll, registerWithRoll, refreshPlayer, logout }),
+    [player, token, loginWithRoll, registerWithRoll, refreshPlayer, logout],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

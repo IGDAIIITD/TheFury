@@ -1,13 +1,10 @@
 import { supabase } from './supabaseClient'
 import type {
-  BuildingActivityDto,
   CardDto,
   CollectionEntryDto,
   DeckDto,
   DeckProblemDto,
   DeckValidationResult,
-  EventDto,
-  FeedEntryDto,
   LeaderboardFilters,
   LeaderboardMetric,
   LeaderboardResponse,
@@ -387,91 +384,75 @@ export async function getPopularDecks(limit = 5): Promise<PopularDeckDto[]> {
   }))
 }
 
-export async function getActiveBuildings(limit = 5): Promise<BuildingActivityDto[]> {
-  const { data, error } = await supabase.rpc('active_buildings', { p_limit: limit })
-  if (error) fail(error, 'Could not load analytics')
-  return (data as { building: string; claims: number }[]).map((r) => ({
-    building: r.building,
-    claimCount: Number(r.claims),
+// ------------------------------------------------------------------
+// Battles: open-lobby feed, campus history, my history (migration 20)
+// ------------------------------------------------------------------
+
+export interface OpenLobbyDto {
+  matchId: string
+  battleCode: string
+  hostId: string
+  hostName: string
+  createdAt: string
+  expiresAt: string
+  mine: boolean
+}
+
+export interface RecentBattleDto {
+  matchId: string
+  winnerName: string
+  loserName: string
+  winCondition: string | null
+  endedAt: string
+}
+
+export type MatchResult = 'WON' | 'LOST' | 'DRAW' | 'ACTIVE' | 'WAITING' | 'EXPIRED' | 'CANCELLED'
+
+export interface MatchHistoryDto {
+  matchId: string
+  result: MatchResult
+  xp: number
+  at: string
+  battleCode: string | null
+}
+
+/** Lobbies waiting for an opponent (under 2 minutes old), newest first. */
+export async function getOpenLobbies(): Promise<OpenLobbyDto[]> {
+  const { data, error } = await supabase.rpc('open_lobbies')
+  if (error) fail(error, 'Could not load open battles')
+  return ((data ?? []) as Record<string, unknown>[]).map((r) => ({
+    matchId: r.match_id as string,
+    battleCode: r.battle_code as string,
+    hostId: r.host_id as string,
+    hostName: r.host_name as string,
+    createdAt: r.created_at as string,
+    expiresAt: r.expires_at as string,
+    mine: r.mine === true,
   }))
 }
 
-// ---------------------------------------------------------------
-// Events / feed
-// ---------------------------------------------------------------
-
-interface EventRow {
-  id: string
-  name: string
-  allowed_sets_json: string
-  bonus_multiplier: number | string
-  start_time: string
-  end_time: string
-  active: boolean
-  created_at: string
+/** Finished battles across campus: who beat whom. */
+export async function getRecentBattles(limit = 30): Promise<RecentBattleDto[]> {
+  const { data, error } = await supabase.rpc('recent_battles', { p_limit: limit })
+  if (error) fail(error, 'Could not load battle history')
+  return ((data ?? []) as Record<string, unknown>[]).map((r) => ({
+    matchId: r.match_id as string,
+    winnerName: r.winner_name as string,
+    loserName: r.loser_name as string,
+    winCondition: (r.win_condition as string | null) ?? null,
+    endedAt: r.ended_at as string,
+  }))
 }
 
-function toEvent(r: EventRow): EventDto {
-  let allowedSets: string[] = []
-  try {
-    const parsed = JSON.parse(r.allowed_sets_json)
-    if (Array.isArray(parsed)) allowedSets = parsed.map(String)
-  } catch {
-    allowedSets = []
-  }
-  return {
-    id: r.id,
-    name: r.name,
-    allowedSets,
-    bonusMultiplier: Number(r.bonus_multiplier),
-    startTime: r.start_time,
-    endTime: r.end_time,
-    active: r.active,
-    createdAt: r.created_at,
-  }
-}
-
-export async function listEvents(): Promise<EventDto[]> {
-  const { data, error } = await supabase.from('events').select('*').order('start_time', { ascending: false })
-  if (error) fail(error, 'Could not load events')
-  return (data as EventRow[]).map(toEvent)
-}
-
-export async function getActiveEvents(): Promise<EventDto[]> {
-  const now = new Date().toISOString()
-  const { data, error } = await supabase
-    .from('events')
-    .select('*')
-    .eq('active', true)
-    .lte('start_time', now)
-    .gte('end_time', now)
-    .order('start_time', { ascending: true })
-  if (error) fail(error, 'Could not load events')
-  return (data as EventRow[]).map(toEvent)
-}
-
-interface FeedRow {
-  type: string
-  text: string
-  player_name: string | null
-  created_at: string
-}
-
-export function toFeedEntry(r: FeedRow): FeedEntryDto {
-  return {
-    type: r.type as FeedEntryDto['type'],
-    message: r.text,
-    playerName: r.player_name,
-    createdAt: r.created_at,
-  }
-}
-
-export async function getFeedHistory(): Promise<FeedEntryDto[]> {
-  const { data, error } = await supabase
-    .from('activity_feed')
-    .select('type, text, player_name, created_at')
-    .order('created_at', { ascending: false })
-    .limit(50)
-  if (error) fail(error, 'Could not load feed')
-  return (data as FeedRow[]).map(toFeedEntry)
+/** The signed-in player's matches: result, XP earned, time. */
+export async function getMyMatchHistory(limit = 50): Promise<MatchHistoryDto[]> {
+  const { data, error } = await supabase.rpc('my_match_history', { p_limit: limit })
+  if (error) fail(error, 'Could not load match history')
+  return ((data ?? []) as Record<string, unknown>[]).map((r) => ({
+    matchId: r.match_id as string,
+    result: r.result as MatchResult,
+    xp: Number(r.xp ?? 0),
+    at: r.at as string,
+    battleCode: (r.battle_code as string | null) ?? null,
+  }))
 }

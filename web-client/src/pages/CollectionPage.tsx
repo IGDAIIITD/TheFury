@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { browseCards, getCollection, toggleFavorite } from '../api/endpoints'
 import { colorIdentityOf, colorSwatches, swatchBg, swatchFg } from '../lib/colors'
 import { CardArt } from '../lib/scryfall'
+import { Chip, FilterBar, FilterGroup } from '../components/Filters'
 import { CACHE_KEYS, cacheGet, cacheSet } from '../lib/idb'
 import type { CardDto, CollectionEntryDto } from '../api/types'
 
@@ -10,6 +11,12 @@ type OwnedFilter = 'all' | 'owned' | 'missing' | 'recent' | 'favorites'
 
 const COLORS = ['W', 'U', 'B', 'R', 'G', 'C']
 const MANA_CURVES = ['0', '1', '2', '3', '4+']
+const RARITY_COLORS: Record<string, string> = {
+  common: '#6f6459',
+  uncommon: '#6b8193',
+  rare: '#b8892a',
+  mythic: '#d2601a',
+}
 const RARITY_ORDER = ['Common', 'Uncommon', 'Rare', 'Mythic']
 /** Cards rendered before "See all" (keeps the first paint and image downloads light). */
 const INITIAL_VISIBLE = 25
@@ -178,7 +185,7 @@ export default function CollectionPage() {
         <h2>Collection</h2>
         <div style={{ display: 'flex', gap: 8 }}>
           <Link to="/collection/events" className="btn ghost">
-            📅 Events
+            Events
           </Link>
           <Link to="/collection/trades" className="btn ghost">
             ↔ Trades
@@ -189,85 +196,69 @@ export default function CollectionPage() {
         {totalOwned} unique cards owned · {cards.length} cards in the catalog
       </p>
 
-      <div className="filters">
-        <input
-          placeholder="Search cards…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          style={{ minWidth: 200 }}
-        />
-        {(
-          [
-            ['all', 'All'],
-            ['owned', 'Owned'],
-            ['missing', 'Missing'],
-            ['recent', 'Recently Found'],
-            ['favorites', '⭐ Favorites'],
-          ] as [OwnedFilter, string][]
-        ).map(([key, label]) => (
-          <span
-            key={key}
-            className={`chip ${ownedFilter === key ? 'active' : ''}`}
-            onClick={() => setOwnedFilter((current) => (current === key ? 'all' : key))}
-          >
-            {label}
-          </span>
-        ))}
-        <span
-          className={`chip ${commanderEligibleOnly ? 'active' : ''}`}
-          onClick={() => setCommanderEligibleOnly((v) => !v)}
-        >
-          Commander Eligible
-        </span>
-        <span style={{ width: 8 }} />
-        {COLORS.map((c) => (
-          <span
-            key={c}
-            className={`chip ${colors.has(c) ? 'active' : ''}`}
-            onClick={() => toggleColor(c)}
-          >
-            {c === 'C' ? 'Colorless' : c}
-          </span>
-        ))}
-        <span style={{ width: 8 }} />
-        {MANA_CURVES.map((cv) => (
-          <span
-            key={cv}
-            className={`chip ${curves.has(cv) ? 'active' : ''}`}
-            onClick={() => toggleCurve(cv)}
-          >
-            Mana {cv}
-          </span>
-        ))}
+      <input
+        className="filter-search"
+        placeholder="Search cards…"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+      />
+      <FilterBar>
+        <FilterGroup label="Show" tone="show">
+          {(
+            [
+              ['all', 'All'],
+              ['owned', 'Owned'],
+              ['missing', 'Missing'],
+              ['recent', 'Recently found'],
+              ['favorites', 'Favorites'],
+            ] as [OwnedFilter, string][]
+          ).map(([key, label]) => (
+            <Chip
+              key={key}
+              active={ownedFilter === key}
+              onClick={() => setOwnedFilter((current) => (current === key ? 'all' : key))}
+            >
+              {label}
+            </Chip>
+          ))}
+          <Chip active={commanderEligibleOnly} onClick={() => setCommanderEligibleOnly((v) => !v)}>
+            Commander
+          </Chip>
+        </FilterGroup>
+        <FilterGroup label="Color" tone="color">
+          {COLORS.map((c) => (
+            <Chip key={c} active={colors.has(c)} onClick={() => toggleColor(c)} color={swatchBg(c)} title={colorIdentityOf(c === 'C' ? null : c)}>
+              <span className="chip-dot" style={{ background: swatchBg(c) }} aria-hidden />
+              {c === 'C' ? 'Colorless' : colorIdentityOf(c)}
+            </Chip>
+          ))}
+        </FilterGroup>
+        <FilterGroup label="Mana value" tone="mana">
+          {MANA_CURVES.map((cv) => (
+            <Chip key={cv} active={curves.has(cv)} onClick={() => toggleCurve(cv)}>
+              {cv}
+            </Chip>
+          ))}
+        </FilterGroup>
         {availableSets.length > 0 && (
-          <>
-            <span style={{ width: 8 }} />
-            {availableSets.map((s) => (
-              <span
-                key={s}
-                className={`chip ${sets.has(s) ? 'active' : ''}`}
-                onClick={() => toggleSet(s)}
-              >
-                Set {s}
-              </span>
+          <FilterGroup label="Set" tone="set">
+            {availableSets.map((set) => (
+              <Chip key={set} active={sets.has(set)} onClick={() => toggleSet(set)}>
+                {set}
+              </Chip>
             ))}
-          </>
+          </FilterGroup>
         )}
         {availableRarities.length > 0 && (
-          <>
-            <span style={{ width: 8 }} />
+          <FilterGroup label="Rarity" tone="rarity">
             {availableRarities.map((r) => (
-              <span
-                key={r}
-                className={`chip ${rarities.has(r) ? 'active' : ''}`}
-                onClick={() => toggleRarity(r)}
-              >
+              <Chip key={r} active={rarities.has(r)} onClick={() => toggleRarity(r)} color={RARITY_COLORS[r.toLowerCase()]}>
                 {r}
-              </span>
+              </Chip>
             ))}
-          </>
+          </FilterGroup>
         )}
-      </div>
+      </FilterBar>
 
       <div className="card-grid">
         {filtered.length === 0 && <div className="empty">No cards match.</div>}

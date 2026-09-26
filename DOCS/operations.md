@@ -100,8 +100,11 @@ progress. Details: [battle-engine.md](battle-engine.md).
 
 ### Make someone an admin
 
+Organisers sign in like everyone else (roll number), then get promoted. Their account email is
+`<roll>@students.thefury.app`:
+
 ```sql
-update public.profiles set role = 'ADMIN' where email = 'someone@example.com';
+update public.profiles set role = 'ADMIN' where roll_no = '2026001';
 ```
 
 (SQL Editor, or the admin console's Players tab once you're an admin.) Demote with `role = 'PLAYER'`.

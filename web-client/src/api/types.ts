@@ -119,28 +119,9 @@ export interface PopularDeckDto {
   playCount: number
 }
 
-export interface BuildingActivityDto {
-  building: string
-  claimCount: number
-}
-
 export type LeaderboardMetric = 'level' | 'collection' | 'winrate'
 
 export type DegreeLevel = 'BTECH' | 'MTECH'
-
-export const BTECH_SPECIALIZATIONS = [
-  'CSE',
-  'CSAI',
-  'CSAM',
-  'CSB',
-  'CSSS',
-  'CSD',
-  'CSECON',
-  'ECE',
-  'EVE',
-] as const
-
-export const MTECH_SPECIALIZATIONS = ['CSE', 'ECE'] as const
 
 export interface LeaderboardFilters {
   degreeLevel?: DegreeLevel
@@ -224,22 +205,3 @@ export interface PlayerSummaryDto {
   specialization: string | null
 }
 
-export interface EventDto {
-  id: string
-  name: string
-  allowedSets: string[]
-  bonusMultiplier: number
-  startTime: string
-  endTime: string
-  active: boolean
-  createdAt: string
-}
-
-export type FeedType = 'DISCOVERY' | 'ACHIEVEMENT' | 'EVENT' | 'SPAWN' | 'TRADE'
-
-export interface FeedEntryDto {
-  type: FeedType
-  message: string
-  playerName: string | null
-  createdAt: string
-}

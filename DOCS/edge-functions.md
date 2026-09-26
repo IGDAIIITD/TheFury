@@ -54,14 +54,15 @@ typed by hand.
 
 ```json
 { "action": "check", "rollNo": "2026001", "firstName": "Aadi" }
-{ "action": "register", "rollNo": "2026001", "firstName": "Aadi", "password": "at least 8 chars" }
+{ "action": "register", "rollNo": "2026001", "firstName": "Aadi", "password": "at least 8 chars", "nickname": "optional" }
 ```
 
 - `check` → **200** `{ status: "NEW" | "REGISTERED", rollNo, name, program, degreeLevel, batch }`.
 - `register` → **201** `{ email }`; the client then signs in with that email and the password. The account is
   created through the admin API with `app_metadata.roll_no` (which public sign-ups can't set), and
-  `handle_new_user` fills the profile from the roster.
-- Errors: 400 bad roll / short password, **403** first name doesn't match, **404** roll not in the roster,
+  `handle_new_user` fills the profile from the roster. A `nickname` (2–24 letters, digits, spaces, `. _ ' -`)
+  replaces the roster name as the display name.
+- Errors: 400 bad roll / short password / bad nickname, **403** first name doesn't match, **404** roll not in the roster,
   **409** roll already registered, 429 more than 20 attempts a minute from one IP (best effort).
 
 Uses `student_roll_status()` (service role only); the roster is never exposed to the browser.

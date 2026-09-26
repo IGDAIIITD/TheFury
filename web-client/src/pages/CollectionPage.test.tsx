@@ -117,12 +117,12 @@ test('toggles favorites filter back to all when clicked twice', async () => {
   render(<MemoryRouter><CollectionPage /></MemoryRouter>)
 
   expect(await screen.findByText('Counterspell')).toBeInTheDocument()
-  fireEvent.click(screen.getByText('⭐ Favorites'))
+  fireEvent.click(screen.getByRole('button', { name: 'Favorites' }))
 
   await waitFor(() => expect(screen.getByText('Counterspell')).toBeInTheDocument())
   expect(screen.queryByText('Island')).not.toBeInTheDocument()
 
-  fireEvent.click(screen.getByText('⭐ Favorites'))
+  fireEvent.click(screen.getByRole('button', { name: 'Favorites' }))
 
   await waitFor(() => expect(screen.getByText('Island')).toBeInTheDocument())
   expect(screen.getByText('Counterspell')).toBeInTheDocument()
@@ -157,7 +157,7 @@ test('filters cards by set', async () => {
   await screen.findByText('Island')
   expect(screen.getByText('Black Lotus')).toBeInTheDocument()
 
-  fireEvent.click(screen.getByText('Set LEA'))
+  fireEvent.click(screen.getByRole('button', { name: 'LEA' }))
 
   await waitFor(() => expect(screen.getByText('Black Lotus')).toBeInTheDocument())
   expect(screen.queryByText('Island')).not.toBeInTheDocument()
@@ -197,12 +197,12 @@ test('toggles recently found filter back to all when clicked twice', async () =>
   render(<MemoryRouter><CollectionPage /></MemoryRouter>)
 
   expect(await screen.findByText('Counterspell')).toBeInTheDocument()
-  fireEvent.click(screen.getByText('Recently Found'))
+  fireEvent.click(screen.getByRole('button', { name: 'Recently found' }))
 
   await waitFor(() => expect(screen.getByText('Counterspell')).toBeInTheDocument())
   expect(screen.queryByText('Island')).not.toBeInTheDocument()
 
-  fireEvent.click(screen.getByText('Recently Found'))
+  fireEvent.click(screen.getByRole('button', { name: 'Recently found' }))
 
   await waitFor(() => expect(screen.getByText('Island')).toBeInTheDocument())
   expect(screen.getByText('Counterspell')).toBeInTheDocument()

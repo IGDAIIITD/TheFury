@@ -60,6 +60,9 @@ events, claims, matches, unique cards and profiles.
 | `leaderboard_full(metric, degree, spec, dept, limit)` | ranked rows + your rank |
 | `popular_decks(limit)`, `active_buildings(limit)` | global analytics |
 | `achievement_catalog()` | the 12 achievements |
+| `open_lobbies()` | lobbies waiting for an opponent (under 2 minutes old): code, host name, expiry, `mine` |
+| `recent_battles(n)` | finished battles across campus: winner, loser, time (a bot win reads "Campus Bot") |
+| `my_match_history(n)` | the caller's matches: `WON`/`LOST`/`DRAW`/`ACTIVE`/`WAITING`/`EXPIRED`/`CANCELLED`, XP earned, time |
 
 `is_admin()`, `compute_level()`, `is_cohort_valid()` and `department_of()` are also callable by everyone, because
 RLS policies and check constraints use them.
@@ -129,6 +132,7 @@ service role (`scripts/download-card-art.ps1`).
 | 17 | `scan_to_unlock_unlimited` | `cards.requires_unlock`: UNLIMITED cards other than the base 15 unlock (unlimited copies) on the first scan; `owned_copies()`; ownership-aware stats/leaderboard |
 | 18 | `student_roster` | `students` roster, `profiles.roll_no`, `student_roll_status()`, roster-filled roll sign-ups, guard for roll/student id/cohort |
 | 19 | `roll_link_on_update` | `link_student_roll()`; roster link also runs when `app_metadata.roll_no` arrives in a later UPDATE (how GoTrue admin createUser writes it) |
+| 20 | `lobby_feed_and_history` | `open_lobbies()`, `recent_battles()`, `my_match_history()`; match statuses `EXPIRED` / `CANCELLED` for lobbies |
 
 **Rules for new migrations**
 

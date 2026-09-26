@@ -86,16 +86,16 @@ token. Then `npm run dev` in `web-client/`: `.env.development` points the app at
 | Method & path | Body | Returns |
 | --- | --- | --- |
 | `GET /features` (no auth) | — | `{ "aiBattlesEnabled": false }`; also the health probe |
-| `POST /lobby` | `{ deckId, eventId? }` | `MatchDto` with `battleCode` (status `PENDING`) |
+| `POST /lobby` | `{ deckId, eventId? }` | `MatchDto` with `battleCode` (status `PENDING`); closes as `EXPIRED` after **2 minutes** if nobody joins |
 | `POST /join` | `{ code, deckId }` | `MatchDto` (status `ACTIVE`); the game starts |
 | `POST /create` | `{ deckId, opponentPlayerId?, opponentDeckId?, eventId? }` | `MatchDto`; with no opponent = vs AI (if enabled) |
-| `GET /matches` | — | the caller's matches |
 | `GET /matches/{id}` | — | `MatchDto` |
 | `GET /matches/{id}/state` | — | the caller's view of the live game, or a terminal summary |
+| `POST /matches/{id}/cancel` | — | 204; the host closes their waiting lobby (`CANCELLED`) |
 | `POST /matches/{id}/concede` | — | 204 |
 
 `MatchDto`: `{ id, player1Id, player2Id, deck1Id, deck2Id, status, winnerId, winCondition, battleCode, eventId,
-createdAt }`, where `status` is one of `PENDING | ACTIVE | COMPLETED | CONCEDED`.
+createdAt }`, where `status` is one of `PENDING | ACTIVE | COMPLETED | CONCEDED | EXPIRED | CANCELLED`.
 
 Errors: `{ "code", "message" }` with **400** (bad input, invalid deck, own lobby, unknown code), **401** (no or
 invalid token), **404** (unknown match or path), **409** (lobby no longer open), **500** (unexpected; logged).
@@ -104,27 +104,36 @@ invalid token), **404** (unknown match or path), **409** (lobby no longer open),
 
 - Connect: `wss://<engine>/ws/match`, sub-protocol `v12.stomp`, `CONNECT` header
   `Authorization: Bearer <access token>` (rejected with an `ERROR` frame otherwise).
-- Subscribe: `/topic/match/{matchId}/p{seat}` (seat 0 = player 1, 1 = player 2). Messages are either
+- Subscribe: `/topic/match/{matchId}/p{seat}` (seat 0 = player 1, 1 = player 2). **Only the player in that seat may
+  subscribe** (the topic carries their hand and decisions); others get an `ERROR` frame. Subscribing also counts
+  as reconnecting (see below). Messages are either
   `{ "type": "info", "message": "..." }` or a full state (typed as `MatchState` in
   `web-client/src/api/battleTypes.ts`):
   `{ matchId, player1Id, player2Id, turn, phase, activePlayerIndex,
   players: [{ index, name, life, hasPriority, hasLost, handSize, librarySize, hand, battlefield, graveyard, mana }],
-  stack, pendingChoice: { requestId, type, prompt, cancellable, minCount, maxCount, options: [{ label, value }] },
+  stack, pendingChoice: { requestId, type, prompt, cancellable, minCount, maxCount, options: [{ label, value, cardId? }] },
   gameOver, status, winnerName, winnerId, winCondition }`. Your own `hand` has the cards; the opponent's only
-  has `handSize`.
+  has `handSize`. `cardId` (when the option is about a card) is the id used in `hand`/`battlefield`, so two
+  identical cards are two distinct options.
 - Act: send to `/app/match/{matchId}/action`:
   `{ "actionType": "CHOICE", "payload": { "requestId": 12, "selectedIndices": [0] } }`.
 
 ### Match lifecycle
 
 1. **Lobby:** the deck is validated (`validate_deck`, including event rules), a `WAITING` row is inserted,
-   and a 6-character code is generated (same alphabet as QR cores).
+   and a 6-character code is generated (same alphabet as QR cores). Open lobbies are listed on the web app's
+   Events page (`open_lobbies()`), where anyone can join with one tap. After **2 minutes** without a joiner the
+   lobby closes as `EXPIRED` (a timer, plus a staleness check on join and state reads in case the engine
+   restarted); the host can close it early (`CANCELLED`).
 2. **Join:** the joiner's deck is validated, then the row is claimed with a **conditional update**
    (`… WHERE status = 'WAITING'`), so only one joiner can win a race. A repeated join by the player who already
    joined returns the running match instead of an error. Both decks are converted and the Forge game starts.
 3. **Play:** Forge runs on its own thread; each seat gets its own view of the state.
 4. **End:** game over → `record_match_result` (winner +50 XP × event bonus, `game_log` rows for both players).
    A concede, or a disconnect longer than **60 s**, gives the opponent the win (then the row is marked `CONCEDED`).
+5. **Reconnect:** a disconnect starts the 60 s grace period; subscribing to the seat again cancels it. A disconnect
+   is ignored while another socket still watches the seat (a reload can open the new socket before the old one
+   closes). The web app remembers the match per tab and rejoins it after a reload.
 
 ## Hosting
 
@@ -170,7 +179,7 @@ on a fresh URL about 2 minutes later.
 | --- | --- |
 | `status` | task, processes, published URL and whether it answers (full detail needs an admin shell) |
 | `logs` | tail of `battle-engine/logs/{supervisor,start-public,engine,cloudflared}.log` |
-| `update` | stop → `mvn clean package` (tests) → start. **Use this to deploy engine code changes.** |
+| `update` | stop → `setup-forge.ps1` (re-syncs + installs `forge-headless`) → `mvn clean package` (tests) → start. **Use this to deploy engine code changes**, including changes under `battle-engine/forge/`. |
 | `restart` / `stop` / `start` | stop clears the URL and kills the whole process tree; the service starts again at boot |
 | `uninstall` | stop and remove the task |
 

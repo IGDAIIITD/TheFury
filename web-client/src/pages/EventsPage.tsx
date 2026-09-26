@@ -1,216 +1,112 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { getActiveEvents, getFeedHistory, listEvents } from '../api/endpoints'
-import { subscribeToFeed } from '../api/feedRealtime'
-import type { EventDto, FeedEntryDto, FeedType } from '../api/types'
-import { useAuth } from '../auth/AuthContext'
-import { CACHE_KEYS, cacheGet, cacheSet } from '../lib/idb'
+import { useCallback, useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { getOpenLobbies, getRecentBattles, type OpenLobbyDto, type RecentBattleDto } from '../api/endpoints'
+import { battleEngineConfigured } from '../api/battleConfig'
+import { formatCountdown, remainingMs, timeAgo } from '../lib/time'
 
-const TYPE_LABEL: Record<FeedType, string> = {
-  DISCOVERY: 'Discovery',
-  ACHIEVEMENT: 'Achievement',
-  EVENT: 'Event',
-  SPAWN: 'Spawn',
-  TRADE: 'Trade',
-}
+/** How often the open-battles list refreshes while the page is visible. */
+const LOBBY_POLL_MS = 5000
 
-const TYPE_ICON: Record<FeedType, string> = {
-  DISCOVERY: '✦',
-  ACHIEVEMENT: '🏅',
-  EVENT: '📅',
-  SPAWN: '🎟️',
-  TRADE: '↔',
-}
-
-function formatTime(iso: string): string {
-  return new Date(iso).toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  })
-}
-
-function feedKey(entry: FeedEntryDto): string {
-  return `${entry.type}:${entry.createdAt}:${entry.message}`
-}
-
-function EventCard({ event }: { event: EventDto }) {
-  const now = Date.now()
-  const started = new Date(event.startTime).getTime() <= now
-  const ended = new Date(event.endTime).getTime() < now
-  const status = event.active ? 'LIVE' : ended ? 'ENDED' : started ? 'LIVE' : 'UPCOMING'
-  const statusColor = status === 'LIVE' ? 'var(--good)' : status === 'ENDED' ? 'var(--muted)' : 'var(--warn)'
-
-  return (
-    <div className="panel" style={{ borderColor: status === 'LIVE' ? 'var(--good)' : undefined }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-        <h3 style={{ margin: 0 }}>{event.name}</h3>
-        <span
-          className="chip active"
-          style={{
-            background: 'transparent',
-            color: statusColor,
-            border: `1px solid ${statusColor}`,
-          }}
-        >
-          {status}
-        </span>
-      </div>
-      <p className="meta" style={{ color: 'var(--muted)', margin: '8px 0' }}>
-        {formatTime(event.startTime)} → {formatTime(event.endTime)}
-      </p>
-      <p className="meta" style={{ margin: '4px 0' }}>
-        <strong style={{ color: 'var(--warn)' }}>×{event.bonusMultiplier} bonus</strong> · allowed sets:{' '}
-        {event.allowedSets.length > 0 ? event.allowedSets.join(', ') : 'all'}
-      </p>
-      {status === 'LIVE' && (
-        <p className="meta" style={{ margin: '4px 0 0', color: 'var(--muted)' }}>
-          Decks are locked to the allowed sets above for matches under this event.
-        </p>
-      )}
-    </div>
-  )
-}
-
+/**
+ * Campus battles: lobbies waiting for an opponent (tap one to join instead of typing its
+ * code) and who won the battles played so far.
+ */
 export default function EventsPage() {
-  const { token } = useAuth()
-  const [events, setEvents] = useState<EventDto[]>([])
-  const [activeEvents, setActiveEvents] = useState<EventDto[]>([])
-  const [feed, setFeed] = useState<FeedEntryDto[]>([])
-  const [live, setLive] = useState(false)
+  const navigate = useNavigate()
+  const [lobbies, setLobbies] = useState<OpenLobbyDto[] | null>(null)
+  const [battles, setBattles] = useState<RecentBattleDto[] | null>(null)
   const [error, setError] = useState('')
-  const seenRef = useRef<Set<string>>(new Set())
-  const feedElRef = useRef<HTMLDivElement | null>(null)
+  const [now, setNow] = useState(() => Date.now())
+  const online = battleEngineConfigured()
 
-  useEffect(() => {
-    let cancelled = false
-    Promise.all([listEvents(), getActiveEvents(), getFeedHistory()])
-      .then(async ([all, active, history]) => {
-        if (cancelled) return
-        setEvents(all)
-        setActiveEvents(active)
-        const merged = history.length > 0 ? history : ((await cacheGet<FeedEntryDto[]>(CACHE_KEYS.feed)) ?? [])
-        merged.forEach((entry) => seenRef.current.add(feedKey(entry)))
-        setFeed(merged)
-        cacheSet(CACHE_KEYS.feed, merged)
+  const loadLobbies = useCallback(() => {
+    getOpenLobbies()
+      .then((rows) => {
+        setLobbies(rows)
+        setError('')
       })
-      .catch(() => {
-        if (cancelled) return
-        setError('Failed to load events and feed.')
-      })
-    return () => {
-      cancelled = true
-    }
+      .catch(() => setError('Could not load open battles.'))
   }, [])
 
   useEffect(() => {
-    if (!token) return
-    const unsubscribe = subscribeToFeed(
-      (entry) => {
-        setFeed((current) => {
-          if (seenRef.current.has(feedKey(entry))) return current
-          seenRef.current.add(feedKey(entry))
-          const next = [entry, ...current].slice(0, 50)
-          cacheSet(CACHE_KEYS.feed, next)
-          return next
-        })
-      },
-      setLive,
-    )
-    return unsubscribe
-  }, [token])
+    loadLobbies()
+    getRecentBattles(30)
+      .then(setBattles)
+      .catch(() => setBattles([]))
+    const poll = window.setInterval(() => {
+      if (document.visibilityState === 'visible') loadLobbies()
+    }, LOBBY_POLL_MS)
+    const tick = window.setInterval(() => setNow(Date.now()), 1000)
+    const onVisible = () => document.visibilityState === 'visible' && loadLobbies()
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      window.clearInterval(poll)
+      window.clearInterval(tick)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [loadLobbies])
 
-  const [upcoming, ended] = useMemo(() => {
-    const now = Date.now()
-    const isActive = new Map(activeEvents.map((e) => [e.id, true]))
-    return [
-      events.filter((e) => !isActive.has(e.id) && new Date(e.startTime).getTime() > now),
-      events.filter((e) => !isActive.has(e.id) && new Date(e.endTime).getTime() <= now),
-    ]
-  }, [events, activeEvents])
-
-  const scrollToBottom = () => {
-    const el = feedElRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }
+  const live = (lobbies ?? []).filter((l) => remainingMs(Date.parse(l.expiresAt), now) > 0)
 
   return (
     <div className="page">
       <h2>Events</h2>
-      <p style={{ color: 'var(--muted)', marginTop: -8 }}>
-        Campus-wide events with set-locked decks and bonus XP. Follow the live feed for activity.
-      </p>
 
-      {activeEvents.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 16 }}>
-          {activeEvents.map((event) => (
-            <EventCard key={event.id} event={event} />
+      <section className="panel events-section">
+        <div className="events-head">
+          <h3>Open battles</h3>
+          <span className="live-dot" aria-hidden />
+          <span className="meta">live</span>
+        </div>
+        {!online && <div className="meta">Battles are offline right now.</div>}
+        {error && <div className="problem">{error}</div>}
+        {lobbies === null && !error && <div className="meta">Loading…</div>}
+        {lobbies !== null && live.length === 0 && (
+          <div className="empty">No open battles. Create one from the Battle tab and it will show up here.</div>
+        )}
+        <div className="lobby-list">
+          {live.map((l) => (
+            <div key={l.matchId} className={`lobby-row${l.mine ? ' mine' : ''}`}>
+              <div className="grow">
+                <div className="lobby-host">{l.mine ? 'Your lobby' : l.hostName}</div>
+                <div className="meta">
+                  Code <span className="lobby-code">{l.battleCode}</span> · closes in{' '}
+                  {formatCountdown(remainingMs(Date.parse(l.expiresAt), now))}
+                </div>
+              </div>
+              {l.mine ? (
+                <button className="btn ghost" onClick={() => navigate('/battle')}>
+                  View
+                </button>
+              ) : (
+                <button
+                  className="btn"
+                  disabled={!online}
+                  onClick={() => navigate(`/battle?join=${encodeURIComponent(l.battleCode)}`)}
+                >
+                  Join
+                </button>
+              )}
+            </div>
           ))}
         </div>
-      )}
+      </section>
 
-      {activeEvents.length === 0 && (
-        <div className="panel" style={{ marginTop: 16 }}>
-          <h3>No live event right now</h3>
-          <p style={{ color: 'var(--muted)', margin: 0 }}>
-            Check back soon — events appear here when they go live.
-          </p>
+      <section className="panel events-section">
+        <h3>Battle history</h3>
+        {battles === null && <div className="meta">Loading…</div>}
+        {battles !== null && battles.length === 0 && <div className="empty">No battles finished yet.</div>}
+        <div className="battle-history">
+          {(battles ?? []).map((b) => (
+            <div key={b.matchId} className="battle-history-row">
+              <span className="grow">
+                <strong>{b.winnerName}</strong> <span className="meta">beat</span> {b.loserName}
+              </span>
+              <span className="meta">{timeAgo(b.endedAt)}</span>
+            </div>
+          ))}
         </div>
-      )}
-
-      <h3 style={{ margin: '24px 0 0' }}>
-        Live feed{' '}
-        <span style={{ color: 'var(--muted)', fontWeight: 400 }}>
-          {live ? '· connected' : '· offline (last known)'}
-        </span>
-      </h3>
-      <div
-        ref={feedElRef}
-        className="panel"
-        style={{ marginTop: 8, maxHeight: 420, overflowY: 'auto' }}
-        onScroll={scrollToBottom}
-      >
-        {error && <p style={{ color: 'var(--bad)' }}>{error}</p>}
-        {feed.length === 0 && !error && (
-          <p style={{ color: 'var(--muted)', margin: 0 }}>No activity yet — scan cards, win battles, and trade to fill this feed.</p>
-        )}
-        {feed.map((entry, idx) => (
-          <div key={`${feedKey(entry)}:${idx}`} style={{ padding: '6px 0', borderBottom: idx === feed.length - 1 ? 'none' : '1px solid var(--border)' }}>
-            <span style={{ marginRight: 8 }}>{TYPE_ICON[entry.type]}</span>
-            <span className="meta" style={{ color: 'var(--accent-2)', fontWeight: 600 }}>
-              {TYPE_LABEL[entry.type]}
-            </span>
-            <span className="meta" style={{ color: 'var(--muted)' }}>
-              {entry.playerName ? `${entry.playerName} ` : ''}— {entry.message}
-            </span>
-            <span className="meta" style={{ float: 'right', color: 'var(--muted)', fontSize: 11 }}>
-              {formatTime(entry.createdAt)}
-            </span>
-          </div>
-        ))}
-      </div>
-
-      {upcoming.length > 0 && (
-        <>
-          <h3 style={{ margin: '24px 0 0' }}>Upcoming</h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 8 }}>
-            {upcoming.map((event) => (
-              <EventCard key={event.id} event={event} />
-            ))}
-          </div>
-        </>
-      )}
-
-      {ended.length > 0 && (
-        <>
-          <h3 style={{ margin: '24px 0 0' }}>Past events</h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 8 }}>
-            {ended.map((event) => (
-              <EventCard key={event.id} event={event} />
-            ))}
-          </div>
-        </>
-      )}
+      </section>
     </div>
   )
 }

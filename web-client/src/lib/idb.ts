@@ -60,7 +60,6 @@ export const CACHE_KEYS = {
   cards: 'cards',
   collection: 'collection',
   stats: 'stats',
-  feed: 'feed',
   leaderboard: (metric: string, scope = 'all') => `leaderboard:${metric}:${scope}`,
   campusPulse: 'campus-pulse',
 } as const

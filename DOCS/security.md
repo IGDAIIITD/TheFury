@@ -51,6 +51,12 @@ unless `SUPABASE_JWT_SECRET` is set (the old default was the public Supabase CLI
 tokens). STOMP `CONNECT` requires a valid token. CORS is restricted to configured origins; unknown paths
 return 4xx, not 500.
 
+**Public sign-up is disabled** (Auth `disable_signup`). Accounts are created only by `student-auth` (admin API,
+after the roster check) or by an admin in the dashboard.
+
+**Battle topics are per seat.** A STOMP `SUBSCRIBE` to `/topic/match/{id}/p{n}` is accepted only from the player in
+seat `n` (running session, else the match row), because the topic carries that player's hand and decisions.
+
 **CORS on Edge Functions** is `*`: auth is a bearer token (no cookies), so a wildcard doesn't expose anything.
 
 **History.** `game_log` is append-only for players (no write policies) and records every claim, trade, match,
@@ -75,9 +81,6 @@ starter grant and spawn with XP and details. Use it for audits.
   know: whoever registers a roll first owns it. If a student reports their roll was taken, an organiser deletes
   that auth user (Dashboard → Authentication) so they can register again. First-name guessing is slowed by a
   per-IP limit (20 tries a minute, best effort).
-- Public email sign-up is still open at the Auth level (anyone with the publishable key can create an email
-  account). Such accounts can never claim a roll. To close it, turn off "Allow new users to sign up"
-  (Dashboard → Authentication → Sign In / Providers); `student-auth` and the dashboard still create users.
 - Supabase Auth hardening (leaked-password protection, CAPTCHA, email confirmation) is not enabled; consider
   it before a campus-wide launch (Dashboard → Authentication).
 

@@ -26,6 +26,9 @@
   --mana-G: #2f7d3a;
   --mana-C: #a1968a;
   --tabbar-h: 60px;
+  --nav-bg: rgba(244, 234, 219, 0.94);
+  --dock-bg: rgba(252, 247, 238, 0.97);
+  --overlay: rgba(43, 29, 20, 0.55);
 }
 
 * {
@@ -688,23 +691,6 @@ a {
   margin: 0 0 12px;
 }
 
-.pulse-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 16px;
-}
-
-.pulse-grid .panel {
-  margin-top: 0;
-}
-
-.pulse-grid h4 {
-  margin: 0 0 8px;
-  font-size: 13px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-}
 
 .pulse-row {
   display: flex;
@@ -727,7 +713,7 @@ a {
   position: fixed;
   inset: 0;
   z-index: 40;
-  background: rgba(43, 29, 20, 0.55);
+  background: var(--overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1040,7 +1026,7 @@ textarea:focus {
 }
 
 .navbar {
-  background: rgba(244, 234, 219, 0.92);
+  background: var(--nav-bg);
   backdrop-filter: blur(8px);
   border-bottom: 2px solid var(--accent);
 }
@@ -1070,7 +1056,7 @@ textarea:focus {
 }
 
 .tabbar {
-  background: rgba(244, 234, 219, 0.96);
+  background: var(--nav-bg);
   backdrop-filter: blur(8px);
 }
 
@@ -1586,7 +1572,7 @@ textarea:focus {
 /* Sticks above the bottom tab bar on phones instead of hiding behind it. */
 .battle-actionbar {
   border: 2px solid var(--accent);
-  background: rgba(252, 247, 238, 0.97);
+  background: var(--dock-bg);
   backdrop-filter: blur(6px);
   box-shadow: 0 -4px 18px rgba(74, 44, 24, 0.15);
 }
@@ -1671,4 +1657,512 @@ input,
 select,
 textarea {
   font-family: inherit;
+}
+
+/* ==================================================================
+   Dark mode: the parchment darkened to deep brown, same red accents.
+   Toggled with the navbar button (data-theme on <html>, src/lib/theme.ts).
+   ================================================================== */
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #1d1611;
+  --bg-soft: #261d17;
+  --panel: #2c221b;
+  --panel-2: #372a21;
+  --border: #4a3a2d;
+  --text: #f0e5d4;
+  --muted: #b09a83;
+  --accent: #e0444f;
+  --accent-strong: #b3202b;
+  --accent-soft: rgba(224, 68, 79, 0.14);
+  --accent-2: #f08a3c;
+  --good: #4caf73;
+  --bad: #ef6a5a;
+  --warn: #e0a73a;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 18px rgba(0, 0, 0, 0.25);
+  --mana-B: #6b5d62;
+  --nav-bg: rgba(38, 29, 23, 0.94);
+  --dock-bg: rgba(44, 34, 27, 0.97);
+  --overlay: rgba(0, 0, 0, 0.6);
+}
+
+:root[data-theme='dark'] body {
+  background:
+    radial-gradient(1200px 500px at 50% -200px, rgba(224, 68, 79, 0.1), transparent 70%),
+    var(--bg);
+}
+
+/* The logo is black text on white: invert it (hue-rotate keeps the red/orange) and screen out the black. */
+:root[data-theme='dark'] .brand img,
+:root[data-theme='dark'] .auth-logo {
+  filter: invert(1) hue-rotate(180deg);
+  mix-blend-mode: screen;
+}
+
+:root[data-theme='dark'] .health-seg:not(.on) {
+  background: rgba(240, 229, 212, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(240, 229, 212, 0.12);
+}
+
+.theme-toggle {
+  padding: 8px 10px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.auth-theme {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+}
+
+.field .optional {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+  margin-left: 4px;
+}
+
+/* ==================================================================
+   Grouped filters: label + chips per group, vertical dividers between.
+   ================================================================== */
+
+.filter-search {
+  width: 100%;
+  max-width: 420px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 15px;
+  margin-bottom: 10px;
+}
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  row-gap: 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 4px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow);
+}
+
+.filter-group {
+  --tone: var(--accent);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 12px;
+  border-left: 1px solid var(--border);
+}
+
+.filter-group:first-child {
+  border-left: none;
+}
+
+.filter-label {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--tone);
+}
+
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.filter-group.tone-show,
+.filter-group.tone-metric {
+  --tone: var(--accent);
+}
+.filter-group.tone-color {
+  --tone: var(--text);
+}
+.filter-group.tone-mana {
+  --tone: #9b6a2f;
+}
+.filter-group.tone-set {
+  --tone: #3f6f8f;
+}
+.filter-group.tone-rarity {
+  --tone: #b8892a;
+}
+.filter-group.tone-branch {
+  --tone: #2e7d4f;
+}
+
+.filter-bar .chip {
+  --chip: var(--tone);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.filter-bar .chip:hover {
+  border-color: var(--chip);
+}
+
+.filter-bar .chip.active {
+  background: var(--chip);
+  border-color: var(--chip);
+  color: #fff;
+}
+
+.filter-group.tone-color .chip.active {
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.35);
+}
+
+.chip-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+
+.filter-bar .chip.active .chip-dot {
+  box-shadow: 0 0 0 1px #fff;
+}
+
+@media (max-width: 600px) {
+  .filter-group {
+    border-left: none;
+    padding: 0 10px;
+    width: 100%;
+  }
+  .filter-group + .filter-group {
+    border-top: 1px solid var(--border);
+    padding-top: 8px;
+  }
+}
+
+/* ==================================================================
+   Card cost pips (battle board): grey = generic, colored = colored pips.
+   ================================================================== */
+
+.cost-pips {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 3px;
+  border-radius: 999px;
+  background: rgba(20, 14, 10, 0.78);
+}
+
+.pip {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+
+.pip.generic {
+  background: #cfc6b8;
+  color: #2b1d14;
+  min-width: 14px;
+  width: auto;
+  padding: 0 3px;
+  border-radius: 7px;
+}
+
+.pip.mana-W {
+  background: var(--mana-W);
+}
+.pip.mana-U {
+  background: var(--mana-U);
+}
+.pip.mana-B {
+  background: var(--mana-B);
+}
+.pip.mana-R {
+  background: var(--mana-R);
+}
+.pip.mana-G {
+  background: var(--mana-G);
+}
+.pip.mana-C {
+  background: var(--mana-C);
+}
+
+.battle-card.small .cost-pips {
+  display: none;
+}
+
+@media (max-width: 600px) {
+  .pip {
+    width: 11px;
+    height: 11px;
+    font-size: 8px;
+  }
+  .pip.generic {
+    min-width: 11px;
+    border-radius: 6px;
+  }
+}
+
+/* ==================================================================
+   Battle: steady action dock, lobby setup, waiting room, history
+   ================================================================== */
+
+.battle-actionbar {
+  min-height: 56px;
+}
+
+.battle-actionbar.idle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-weight: 600;
+  border-color: var(--border);
+}
+
+.instruction-banner {
+  min-height: 66px;
+}
+
+.battle-setup {
+  margin-bottom: 20px;
+}
+
+.battle-setup-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.battle-setup-head h3 {
+  margin: 0;
+}
+
+.deck-select,
+.battle-join-row input {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 10px;
+  font-size: 14px;
+}
+
+.deck-select {
+  min-width: 200px;
+  max-width: 100%;
+}
+
+.battle-join-row {
+  display: flex;
+  gap: 8px;
+}
+
+.battle-join-row input {
+  flex: 1;
+  min-width: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.25em;
+  font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+}
+
+.battle-or {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  margin: 12px 0;
+}
+
+.battle-or::before,
+.battle-or::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--border);
+}
+
+.battle-create {
+  width: 100%;
+  margin-bottom: 8px;
+}
+
+.battle-setup-note {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 6px 0 0;
+}
+
+.resume-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  border-color: var(--accent);
+}
+
+.resume-banner .grow {
+  flex: 1;
+}
+
+.lobby-countdown {
+  margin-top: 10px;
+  color: var(--muted);
+}
+
+.lobby-countdown strong {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  font-size: 18px;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.history-row {
+  display: grid;
+  grid-template-columns: 110px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+
+.history-row:last-child {
+  border-bottom: none;
+}
+
+.result-badge {
+  justify-self: start;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--muted);
+}
+
+.result-badge.won {
+  background: rgba(46, 125, 79, 0.15);
+  color: var(--good);
+}
+
+.result-badge.lost {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.result-badge.active,
+.result-badge.waiting {
+  background: rgba(210, 96, 26, 0.14);
+  color: var(--accent-2);
+}
+
+.history-xp {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.history-time {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* ==================================================================
+   Events: open battles (live) + battle history
+   ================================================================== */
+
+.events-section {
+  margin-bottom: 18px;
+}
+
+.events-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.events-head h3 {
+  margin: 0;
+}
+
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: seg-pulse 1.4s ease-in-out infinite;
+}
+
+.lobby-list,
+.battle-history {
+  display: flex;
+  flex-direction: column;
+}
+
+.lobby-row,
+.battle-history-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.lobby-row:last-child,
+.battle-history-row:last-child {
+  border-bottom: none;
+}
+
+.lobby-row .grow,
+.battle-history-row .grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.lobby-row.mine .lobby-host {
+  color: var(--accent);
+}
+
+.lobby-host {
+  font-weight: 700;
+}
+
+.lobby-code {
+  font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+  letter-spacing: 0.15em;
+  color: var(--text);
 }

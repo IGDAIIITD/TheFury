@@ -2,6 +2,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import OnboardingModal from './OnboardingModal'
 import logo from '../assets/igda-iiitd-logo.png'
+import ThemeToggle from './ThemeToggle'
 import { battleEngineConfigured } from '../api/battleConfig'
 
 const TABS = [
@@ -84,6 +85,7 @@ export default function Layout() {
         ))}
         <span className="spacer" />
         {player && <span className="nav-player">{player.displayName} · Lv {player.level}</span>}
+        <ThemeToggle />
         <button className="btn ghost" onClick={onLogout}>
           Logout
         </button>

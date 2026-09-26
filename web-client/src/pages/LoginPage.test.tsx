@@ -31,7 +31,6 @@ let auth: Record<string, ReturnType<typeof vi.fn>>
 beforeEach(() => {
   vi.clearAllMocks()
   auth = {
-    login: vi.fn().mockResolvedValue(undefined),
     loginWithRoll: vi.fn().mockResolvedValue(undefined),
     registerWithRoll: vi.fn().mockResolvedValue(undefined),
   }
@@ -96,7 +95,7 @@ test('a NEW roll shows the roster identity and creates the account with a confir
 
   fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'dragons12' } })
   fireEvent.click(screen.getByRole('button', { name: 'Create account' }))
-  await waitFor(() => expect(auth.registerWithRoll).toHaveBeenCalledWith('2026001', 'Aadi', 'dragons12'))
+  await waitFor(() => expect(auth.registerWithRoll).toHaveBeenCalledWith('2026001', 'Aadi', 'dragons12', undefined))
 })
 
 test('a REGISTERED roll just asks for the password', async () => {
@@ -119,11 +118,27 @@ test('a wrong password gets a friendly message', async () => {
   await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Wrong password'))
 })
 
-test('staff sign-in still accepts email + password', async () => {
+test('there is no email sign-in at all', () => {
   renderPage()
-  fireEvent.click(screen.getByRole('button', { name: 'Staff sign-in' }))
-  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'organiser@iiitd.ac.in' } })
-  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'secret' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
-  await waitFor(() => expect(auth.login).toHaveBeenCalledWith('organiser@iiitd.ac.in', 'secret'))
+  expect(screen.queryByRole('button', { name: /staff/i })).not.toBeInTheDocument()
+  expect(screen.queryByLabelText(/email/i)).not.toBeInTheDocument()
+})
+
+test('a NEW roll can pick an optional nickname', async () => {
+  mockedCheckRoll.mockResolvedValue({ ...AADI, status: 'NEW' })
+  renderPage()
+  identify()
+  fireEvent.change(await screen.findByLabelText(/Nickname/), { target: { value: '  Dragon Lord ' } })
+  fireEvent.change(screen.getByLabelText('Create a password'), { target: { value: 'dragons12' } })
+  fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'dragons12' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Create account' }))
+  await waitFor(() => expect(auth.registerWithRoll).toHaveBeenCalledWith('2026001', 'Aadi', 'dragons12', 'Dragon Lord'))
+})
+
+test('a REGISTERED roll is not asked for a nickname', async () => {
+  mockedCheckRoll.mockResolvedValue({ ...AADI, status: 'REGISTERED' })
+  renderPage()
+  identify()
+  await screen.findByLabelText('Password')
+  expect(screen.queryByLabelText(/Nickname/)).not.toBeInTheDocument()
 })

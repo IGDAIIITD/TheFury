@@ -29,13 +29,22 @@ export function checkRoll(rollNo: string, firstName: string): Promise<RollStatus
   return callEdgeFunction<RollStatus>('student-auth', { action: 'check', rollNo: rollNo.trim(), firstName })
 }
 
-/** Create the account for a NEW roll with the chosen password; returns its sign-in email. */
-export async function registerRoll(rollNo: string, firstName: string, password: string): Promise<string> {
+/**
+ * Create the account for a NEW roll with the chosen password and an optional nickname
+ * (shown instead of the roster name); returns its sign-in email.
+ */
+export async function registerRoll(
+  rollNo: string,
+  firstName: string,
+  password: string,
+  nickname?: string,
+): Promise<string> {
   const res = await callEdgeFunction<{ email: string }>('student-auth', {
     action: 'register',
     rollNo: rollNo.trim(),
     firstName,
     password,
+    nickname: nickname?.trim() || undefined,
   })
   return res.email
 }
