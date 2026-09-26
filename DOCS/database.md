@@ -74,6 +74,7 @@ RLS policies and check constraints use them.
 | `validate_deck(deck, event)` | battle engine | match-time deck check (ownership, copies, bans, size, event sets) |
 | `grant_starter_pack(player)` | signup trigger | build the starter deck once |
 | `student_roll_status(roll, first_name)` | `student-auth` Edge Function | NOT_FOUND / NAME_MISMATCH / NEW / REGISTERED (+ roster identity once the name matched) |
+| `link_student_roll(user, roll)` | signup + `on_auth_user_roll_linked` triggers | fill an unlinked profile from the roster (name, cohort, student id, `roll_no`) |
 | `student_name_matches(name, typed)` | internal | typed first name = any word of the roster name, letters only, case-insensitive |
 | `owned_copies(player, card)` | internal | **the ownership rule**, used by `apply_claim` and both deck validators: UNLIMITED → unlimited if free or unlocked (else 0); UNLOCK → copies (rows); UNIQUE → serials owned |
 | `add_feed_entry(...)`, `sweep_achievements(player)`, `card_print_core(card)`, `unique_physical_uuid(core)`, `assert_active_player(player)` | internal | helpers |
@@ -87,6 +88,9 @@ the Edge Functions map these to HTTP statuses.
   the pack never block signup). Roll accounts (`app_metadata.roll_no`, set only by `student-auth` via the admin
   API) get name, cohort, student id and `roll_no` from `students`; other accounts use the display name from
   signup metadata (or the email) and a valid cohort if one was given.
+- `on_auth_user_roll_linked` (AFTER UPDATE of `raw_app_meta_data` on `auth.users`) → `link_student_roll`: GoTrue admin
+  createUser inserts the user first and writes `app_metadata` in a follow-up update, so the insert hook alone never
+  sees the roll.
 - `trg_profiles_guard`, `trg_profiles_sync_level`: protect profile fields; derive the level.
 - `trg_feed_prune`: keeps `activity_feed` at 50 rows.
 
@@ -124,6 +128,7 @@ service role (`scripts/download-card-art.ps1`).
 | 16 | `multi_copy_unlocks` | up to 4 copies of an UNLOCK card, one per distinct code; one unique serial per player via scanning |
 | 17 | `scan_to_unlock_unlimited` | `cards.requires_unlock`: UNLIMITED cards other than the base 15 unlock (unlimited copies) on the first scan; `owned_copies()`; ownership-aware stats/leaderboard |
 | 18 | `student_roster` | `students` roster, `profiles.roll_no`, `student_roll_status()`, roster-filled roll sign-ups, guard for roll/student id/cohort |
+| 19 | `roll_link_on_update` | `link_student_roll()`; roster link also runs when `app_metadata.roll_no` arrives in a later UPDATE (how GoTrue admin createUser writes it) |
 
 **Rules for new migrations**
 

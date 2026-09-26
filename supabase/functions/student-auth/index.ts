@@ -98,5 +98,15 @@ Deno.serve(async (req) => {
     console.error("createUser failed", created.error.message);
     return errorJson(500, "Could not create the account. Try again.");
   }
+
+  // The roster link happens in a trigger (migration 19). Never leave an unlinked account behind:
+  // it would hold the synthetic email while the roll still reads as NEW.
+  const userId = created.data.user?.id;
+  const { data: profile } = await admin.from("profiles").select("roll_no").eq("id", userId).maybeSingle();
+  if (profile?.roll_no !== rollNo) {
+    console.error("roll link missing for new user", userId);
+    if (userId) await admin.auth.admin.deleteUser(userId);
+    return errorJson(500, "Could not create the account. Try again.");
+  }
   return json(201, { email });
 });

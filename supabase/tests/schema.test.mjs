@@ -384,6 +384,18 @@ console.log('\n# student roster + roll-number accounts')
   const ghost = await signUp(db, 'ghost@students.thefury', {}, { roll_no: '1234567' })
   check('unknown app_metadata roll is ignored, not linked', (await q(`select roll_no from public.profiles where id = $1`, [ghost]))[0].roll_no === null)
 
+  // GoTrue's admin createUser inserts the user first and sets app_metadata in a follow-up UPDATE.
+  const rehan = await signUp(db, '2026295@students.thefury', { display_name: 'Mohd Rehan' })
+  check('before app_metadata arrives the account is unlinked', (await q(`select roll_no from public.profiles where id = $1`, [rehan]))[0].roll_no === null)
+  await q(`update auth.users set raw_app_meta_data = raw_app_meta_data || '{"roll_no":"2026295"}' where id = $1`, [rehan])
+  const rp = (await q(`select display_name, specialization, student_id, roll_no from public.profiles where id = $1`, [rehan]))[0]
+  check('app_metadata set by a later UPDATE still links the roster (GoTrue order)', rp.roll_no === '2026295' && rp.specialization === 'ECE' && rp.student_id === '2026295' && rp.display_name === 'Mohd Rehan', JSON.stringify(rp))
+  let clash = true
+  try { await q(`update auth.users set raw_app_meta_data = raw_app_meta_data || '{"roll_no":"2026295"}' where id = $1`, [ghost]) } catch { clash = false }
+  check('linking a roll that another account holds fails (rolls back createUser)', !clash)
+  await q(`update auth.users set raw_app_meta_data = raw_app_meta_data || '{"roll_no":"2026001"}', email = 'x@y' where id = $1`, [rehan])
+  check('a later change never re-links an already linked account', (await q(`select roll_no from public.profiles where id = $1`, [rehan]))[0].roll_no === '2026295')
+
   r = await as(db, 'authenticated', aadi, `update public.profiles set display_name = 'Aadi D' where id = $1`, [aadi])
   check('roll players can still rename themselves', r.ok && r.affected === 1, r.error)
   for (const [col, val] of [['roll_no', '2026295'], ['student_id', '2026999'], ['specialization', 'ECE']]) {
