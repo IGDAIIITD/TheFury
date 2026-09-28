@@ -2166,3 +2166,17 @@ textarea {
   letter-spacing: 0.15em;
   color: var(--text);
 }
+
+/* Scan page: a non-card QR code is in view */
+.scan-hint {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(20, 14, 10, 0.8);
+  color: #fff;
+  font-size: 13px;
+  text-align: center;
+}

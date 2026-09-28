@@ -1,7 +1,7 @@
 import '@testing-library/jest-dom'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { vi } from 'vitest'
-import ScanPage from './ScanPage'
+import ScanPage, { isCardQr } from './ScanPage'
 import { ClaimApiError } from '../api/qrEndpoints'
 
 vi.mock('../api/qrEndpoints', () => ({
@@ -157,4 +157,17 @@ test('unlocking a scan-once common says it gives unlimited copies', async () => 
   fireEvent.click(screen.getByRole('button', { name: 'Claim' }))
 
   expect(await screen.findByText('+10 XP · unlimited copies · discovery #1')).toBeInTheDocument()
+})
+
+describe('isCardQr', () => {
+  it('accepts signed tokens and bare 12-character spawn codes, in any case', () => {
+    expect(isCardQr('V1.BKK66ZJKKJAA.' + 'A1'.repeat(32))).toBe(true)
+    expect(isCardQr('  v1.bkk66zjkkjaa.' + 'a1'.repeat(32) + ' ')).toBe(true)
+    expect(isCardQr('BKK66ZJKKJAA')).toBe(true)
+  })
+  it('rejects other QR contents', () => {
+    expect(isCardQr('https://igdaiiitd.github.io/TheFury/')).toBe(false)
+    expect(isCardQr('V1.BKK66ZJKKJAA.NOTHEX')).toBe(false)
+    expect(isCardQr('')).toBe(false)
+  })
 })

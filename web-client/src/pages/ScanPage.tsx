@@ -5,6 +5,16 @@ import type { ClaimResult } from '../api/types'
 
 type CameraState = 'idle' | 'requesting' | 'live' | 'denied' | 'unsupported'
 
+/** What a card QR encodes: a signed token (printed/spawned) or a bare 12-character spawn code. */
+const CARD_QR_RE = /^(V1\.[A-Z2-9]{12}\.[0-9A-F]{64}|[A-Z2-9]{12})$/i
+/** Decode at most this often, on a frame scaled down to DECODE_MAX_SIDE: phones stay responsive. */
+const DECODE_INTERVAL_MS = 120
+const DECODE_MAX_SIDE = 960
+
+export function isCardQr(text: string): boolean {
+  return CARD_QR_RE.test(text.trim())
+}
+
 type Outcome =
   | { kind: 'success'; result: ClaimResult }
   | { kind: 'already'; result: ClaimResult }
@@ -45,6 +55,8 @@ export default function ScanPage() {
   const rafRef = useRef(0)
   const activeRef = useRef(false)
   const submittingRef = useRef(false)
+  const lastDecodeRef = useRef(0)
+  const [foreignQr, setForeignQr] = useState(false)
 
   const cameraSupported =
     typeof navigator !== 'undefined' && typeof navigator.mediaDevices?.getUserMedia === 'function'
@@ -78,6 +90,12 @@ export default function ScanPage() {
 
   const handleScanRef = useRef<(token: string) => void>(() => {})
   handleScanRef.current = (token: string) => {
+    // Some other QR code (a URL, a poster...): keep scanning instead of failing the claim.
+    if (!isCardQr(token)) {
+      setForeignQr(true)
+      return
+    }
+    setForeignQr(false)
     void doClaim(token)
   }
 
@@ -86,11 +104,18 @@ export default function ScanPage() {
       rafRef.current = 0
       return
     }
+    const now = performance.now()
+    if (now - lastDecodeRef.current < DECODE_INTERVAL_MS) {
+      rafRef.current = requestAnimationFrame(decodeLoop)
+      return
+    }
+    lastDecodeRef.current = now
     const video = videoRef.current
     const canvas = canvasRef.current
     if (video && canvas && video.readyState >= 2) {
-      const w = video.videoWidth
-      const h = video.videoHeight
+      const scale = Math.min(1, DECODE_MAX_SIDE / Math.max(video.videoWidth, video.videoHeight, 1))
+      const w = Math.round(video.videoWidth * scale)
+      const h = Math.round(video.videoHeight * scale)
       if (w > 0 && h > 0) {
         canvas.width = w
         canvas.height = h
@@ -206,6 +231,11 @@ export default function ScanPage() {
                 style={{ width: '100%', borderRadius: 8, background: '#000', minHeight: 180 }}
               />
               <canvas ref={canvasRef} style={{ display: 'none' }} />
+              {camera === 'live' && foreignQr && (
+                <div className="scan-hint" role="status">
+                  That QR code isn&apos;t a The Fury card. Point at a card code.
+                </div>
+              )}
               {camera !== 'live' && (
                 <div
                   style={{

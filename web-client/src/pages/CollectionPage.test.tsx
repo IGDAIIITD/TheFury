@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { vi } from 'vitest'
 import CollectionPage from './CollectionPage'
@@ -265,7 +265,9 @@ test('a scan-once common is missing until unlocked, then unlimited', async () =>
   const { unmount } = render(<MemoryRouter><CollectionPage /></MemoryRouter>)
   await screen.findByText('No cards match.')
   showAllCards()
-  expect(await screen.findByText('Missing · scan once for unlimited')).toBeInTheDocument()
+  const archerTile = (await screen.findByText('Skeleton Archer')).closest('.card-tile') as HTMLElement
+  expect(within(archerTile).getByText('Missing · scan once, unlock forever')).toBeInTheDocument()
+  expect(within(archerTile).getByText('Scan once, unlock forever')).toBeInTheDocument()
   unmount()
 
   mockedEndpoints.getCollection.mockResolvedValue([
@@ -273,10 +275,10 @@ test('a scan-once common is missing until unlocked, then unlimited', async () =>
   ])
   render(<MemoryRouter><CollectionPage /></MemoryRouter>)
   expect(await screen.findByText('Skeleton Archer')).toBeInTheDocument()
-  expect(screen.getByText('Unlimited')).toBeInTheDocument()
+  expect(screen.getByText('Unlimited copies')).toBeInTheDocument()
 })
 
 test('an UNLOCK card shows copies out of 4', async () => {
   render(<MemoryRouter><CollectionPage /></MemoryRouter>)
-  expect(await screen.findByText('Owned: 2 of 4')).toBeInTheDocument()
+  expect(await screen.findByText('Owned 2 of 4 · scan another code for more')).toBeInTheDocument()
 })

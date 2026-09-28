@@ -4,6 +4,7 @@ import { browseCards, getCollection, toggleFavorite } from '../api/endpoints'
 import { colorIdentityOf, colorSwatches, swatchBg, swatchFg } from '../lib/colors'
 import { CardArt } from '../lib/scryfall'
 import { Chip, FilterBar, FilterGroup } from '../components/Filters'
+import { ownershipRule, ownershipStatus } from '../lib/ownership'
 import { CACHE_KEYS, cacheGet, cacheSet } from '../lib/idb'
 import type { CardDto, CollectionEntryDto } from '../api/types'
 
@@ -21,7 +22,6 @@ const RARITY_ORDER = ['Common', 'Uncommon', 'Rare', 'Mythic']
 /** Cards rendered before "See all" (keeps the first paint and image downloads light). */
 const INITIAL_VISIBLE = 25
 /** An UNLOCK card gives one copy per distinct code scanned, up to this many (apply_claim). */
-const MAX_UNLOCK_COPIES = 4
 
 export default function CollectionPage() {
   const [cards, setCards] = useState<CardDto[]>([])
@@ -268,15 +268,7 @@ export default function CollectionPage() {
           const quantity = entry ? entry.quantity : 0
           const discovered = entry ? entry.discoveredCount : 0
           const isFav = entry?.favorite ?? false
-          const label = !owned
-            ? card.requiresUnlock
-              ? 'Missing · scan once for unlimited'
-              : 'Missing'
-            : card.ownershipType === 'UNLIMITED'
-              ? 'Unlimited'
-              : card.ownershipType === 'UNLOCK'
-                ? `Owned: ${quantity} of ${MAX_UNLOCK_COPIES}`
-                : `Owned: ${quantity}`
+          const { label } = ownershipStatus(card, owned ? quantity : null)
           return (
             <div key={card.id} className={`card-tile ${owned ? '' : 'missing'}`}>
               <CardArt name={card.forgeName} />
@@ -312,10 +304,7 @@ export default function CollectionPage() {
               <div className="meta">
                 {card.types ?? ''} · {card.rarity ?? ''}
               </div>
-              <div className="meta ownership-line">
-                Ownership: {card.ownershipType}
-                {card.requiresUnlock ? ' (scan once)' : ''}
-              </div>
+              <div className="meta ownership-line">{ownershipRule(card)}</div>
               <div className="owned" style={{ color: owned ? 'var(--good)' : 'var(--muted)' }}>
                 {label}
                 {discovered > 0 && <span style={{ color: 'var(--warn)' }}> · found ×{discovered}</span>}
