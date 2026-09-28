@@ -456,3 +456,10 @@ export async function getMyMatchHistory(limit = 50): Promise<MatchHistoryDto[]> 
     battleCode: (r.battle_code as string | null) ?? null,
   }))
 }
+
+/** The saved text game log of a finished match you played (null when none was saved). */
+export async function getMatchLog(matchId: string): Promise<string | null> {
+  const { data, error } = await supabase.from('match_logs').select('log').eq('match_id', matchId).maybeSingle()
+  if (error) fail(error, 'Could not load the match log')
+  return (data as { log: string } | null)?.log ?? null
+}

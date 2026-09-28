@@ -148,6 +148,40 @@ public class ForgeMatchSession implements Consumer<Map<String, Object>> {
         }
     }
 
+    /** Forge log entry types left out of the saved text log: mana taps and phase steps are noise. */
+    private static final java.util.Set<forge.game.GameLogEntryType> LOG_SKIP =
+            java.util.EnumSet.of(forge.game.GameLogEntryType.MANA, forge.game.GameLogEntryType.PHASE);
+    /** Upper bound for a saved log, so a runaway game can't write megabytes. */
+    static final int MAX_LOG_LINES = 5000;
+
+    /**
+     * Forge's own game log as plain text, oldest first: "[Turn] Turn 3 (Aadi)", "[Combat] Aadi assigned
+     * Grizzly Bears to attack Rehan", "[Life] Rehan lost 2 life". Null when the game never started.
+     */
+    public String getLogText() {
+        try {
+            List<forge.game.GameLogEntry> entries = headless.getGame().getGameLog().getLogEntries(null);
+            StringBuilder sb = new StringBuilder();
+            int lines = 0;
+            for (forge.game.GameLogEntry e : entries) {
+                if (e == null || e.message() == null || LOG_SKIP.contains(e.type())) {
+                    continue;
+                }
+                if (lines == MAX_LOG_LINES) {
+                    sb.append("[Information] (log truncated)\n");
+                    break;
+                }
+                sb.append('[').append(e.type().getCaption()).append("] ")
+                        .append(e.message().replace('\n', ' ').trim()).append('\n');
+                lines++;
+            }
+            return sb.length() == 0 ? null : sb.toString();
+        } catch (Throwable t) {
+            log.warn("Could not read the game log for match {}", matchId, t);
+            return null;
+        }
+    }
+
     public boolean isFinished() {
         return headless.isFinished();
     }

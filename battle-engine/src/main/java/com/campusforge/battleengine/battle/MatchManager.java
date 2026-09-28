@@ -209,7 +209,10 @@ public class MatchManager implements MatchSeatAccess {
                 forgeDeck1, player1Id, player1Name,
                 forgeDeck2, player2Id, player2Name,
                 messaging,
-                s -> finishGame(matchId, s.getWinnerPlayerId(), s.getWinCondition()));
+                s -> {
+                    finishGame(matchId, s.getWinnerPlayerId(), s.getWinCondition());
+                    saveLog(matchId, s, null);
+                });
 
         ForgeMatchSession previous = activeMatches.put(matchId, session);
         if (previous != null) {
@@ -224,6 +227,17 @@ public class MatchManager implements MatchSeatAccess {
         log.info("Match {} finished, winner={}, condition={}", matchId, winnerId, winCondition);
         supabase.recordMatchResult(matchId, winnerId, winCondition);
         activeMatches.remove(matchId);
+    }
+
+    /** Persists Forge's text log for a finished match (best effort: a failure only loses the log). */
+    void saveLog(UUID matchId, ForgeMatchSession session, String closingLine) {
+        String text = session.getLogText();
+        if (closingLine != null) {
+            text = (text == null ? "" : text) + "[Game Outcome] " + closingLine + "\n";
+        }
+        if (text != null) {
+            supabase.saveMatchLog(matchId, text);
+        }
     }
 
     public void reportDisconnect(UUID matchId, UUID playerId) {
@@ -257,6 +271,7 @@ public class MatchManager implements MatchSeatAccess {
 
         ForgeMatchSession session = activeMatches.remove(matchId);
         if (session != null) {
+            saveLog(matchId, session, supabase.displayName(playerId).orElse("A player") + " conceded.");
             String winnerName = winnerId != null ? supabase.displayName(winnerId).orElse(null) : null;
             Map<String, Object> terminal = new java.util.LinkedHashMap<>();
             terminal.put("gameOver", true);

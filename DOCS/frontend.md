@@ -13,7 +13,7 @@ origins.
 | `/collection/trades` | offer / accept / decline / cancel trades; live via Realtime | trade RPCs |
 | `/collection/events` | **Open battles** (lobbies waiting for an opponent, refreshed every 5 s; **Join** opens `/battle?join=CODE`) + **battle history** (who beat whom) | `open_lobbies()`, `recent_battles()` |
 | `/decks` | deck builder with server-side validation | `decks`, `deck_cards`, `validate_deck_spec` |
-| `/battle` | deck + join-by-code + create lobby, 2-minute lobby countdown, match history (result, XP, time), the battle board | battle engine REST + WebSocket, `my_match_history()` |
+| `/battle` | deck + join-by-code + create lobby, 2-minute lobby countdown, match history (result, XP, time, **Log**: the saved text game log of a finished match), the battle board | battle engine REST + WebSocket, `my_match_history()` |
 | `/scan` | camera QR scanner (jsQR, throttled, ignores non-card QR codes) + manual 12-character entry for spawned codes | `claim` Edge Function |
 | `/profile` | stats, badges, battle record | `my_profile_stats` |
 | `/leaderboard` | level / collection / win-rate rankings, filter by branch (CSE … EVE); most-played decks | `leaderboard_full`, `popular_decks` |

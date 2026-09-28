@@ -308,6 +308,30 @@ public class SupabaseClient {
         return patchMatch(matchId, body, "&status=eq.WAITING");
     }
 
+    /** Upserts the text game log of a finished match into match_logs (migration 21). */
+    public void saveMatchLog(UUID matchId, String text) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("match_id", matchId.toString());
+        body.put("log", text);
+        body.put("line_count", (int) text.chars().filter(c -> c == '\n').count());
+        try {
+            HttpRequest req = HttpRequest.newBuilder(URI.create(baseUrl + "/rest/v1/match_logs?on_conflict=match_id"))
+                    .header("apikey", serviceRoleKey)
+                    .header("Authorization", "Bearer " + serviceRoleKey)
+                    .header("Content-Type", "application/json")
+                    .header("Prefer", "resolution=merge-duplicates,return=minimal")
+                    .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)))
+                    .build();
+            HttpResponse<byte[]> res = http.send(req, HttpResponse.BodyHandlers.ofByteArray());
+            if (res.statusCode() >= 300) {
+                log.warn("saveMatchLog {} status {} body {}", matchId, res.statusCode(),
+                        new String(res.body(), StandardCharsets.UTF_8));
+            }
+        } catch (Exception e) {
+            log.warn("saveMatchLog {} failed", matchId, e);
+        }
+    }
+
     /** Records the terminal state via the service-role RPC (XP + feed + status). */
     public void recordMatchResult(UUID matchId, UUID winnerId, String winCondition) {
         Map<String, Object> body = new HashMap<>();

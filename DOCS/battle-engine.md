@@ -131,6 +131,8 @@ invalid token), **404** (unknown match or path), **409** (lobby no longer open),
 3. **Play:** Forge runs on its own thread; each seat gets its own view of the state.
 4. **End:** game over → `record_match_result` (winner +50 XP × event bonus, `game_log` rows for both players).
    A concede, or a disconnect longer than **60 s**, gives the opponent the win (then the row is marked `CONCEDED`).
+   Either way the engine saves **Forge's text game log** to `match_logs` (oldest line first, mana taps and phase
+   steps left out, at most 5,000 lines; a concede adds a closing line). The live game state itself is never stored.
 5. **Reconnect:** a disconnect starts the 60 s grace period; subscribing to the seat again cancels it. A disconnect
    is ignored while another socket still watches the seat (a reload can open the new socket before the old one
    closes). The web app remembers the match per tab and rejoins it after a reload.

@@ -32,6 +32,7 @@ rest is callable only by the service role (Edge Functions, battle engine). See [
 | `activity_feed` | last 50 public activity lines (UI ticker) | read (signed in) | game functions |
 | `game_log` | **durable, append-only history**: CLAIM, TRADE, MATCH, STARTER, SPAWN rows with XP and JSON detail | read own | game functions, `admin-spawn` |
 | `app_config` | public key/value runtime settings (`battle_engine_url`) | read (anyone) | service role, admins |
+| `match_logs` | text game log of a finished battle (Forge's log: turns, casts, combat, life), one row per match | read if you played it (admins: all) | battle engine (service role) |
 | `students` | the IIITD roster: roll number, name, program, batch, degree. **Personal data** | nothing (admins read) | `scripts/import-students.mjs` (service role) |
 
 \* `profiles`: players may change `display_name` (1–40 chars), `avatar`, `student_id`, `degree_level` +
@@ -133,6 +134,7 @@ service role (`scripts/download-card-art.ps1`).
 | 18 | `student_roster` | `students` roster, `profiles.roll_no`, `student_roll_status()`, roster-filled roll sign-ups, guard for roll/student id/cohort |
 | 19 | `roll_link_on_update` | `link_student_roll()`; roster link also runs when `app_metadata.roll_no` arrives in a later UPDATE (how GoTrue admin createUser writes it) |
 | 20 | `lobby_feed_and_history` | `open_lobbies()`, `recent_battles()`, `my_match_history()`; match statuses `EXPIRED` / `CANCELLED` for lobbies |
+| 21 | `match_logs` | text game log per finished match, readable by its two players and admins |
 
 **Rules for new migrations**
 

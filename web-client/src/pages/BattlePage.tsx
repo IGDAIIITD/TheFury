@@ -18,6 +18,7 @@ import { LOBBY_TTL_MS, type CardEntry, type MatchDto, type MatchState, type Pend
 import { formatCountdown, remainingMs, timeAgo } from '../lib/time'
 import type { DeckDto } from '../api/types'
 import BattleCard from '../components/BattleCard'
+import MatchLogButton from '../components/MatchLogButton'
 import { scryfallArtUrl } from '../lib/scryfall'
 import { mockMatch, mockState } from './battleFixture'
 import {
@@ -1198,6 +1199,11 @@ export default function BattlePage() {
                 <span className={`result-badge ${h.result.toLowerCase()}`}>{RESULT_LABEL[h.result] ?? h.result}</span>
                 <span className="history-xp">{xpLabel(h)}</span>
                 <span className="history-time">{timeAgo(h.at)}</span>
+                {h.result === 'WON' || h.result === 'LOST' || h.result === 'DRAW' ? (
+                  <MatchLogButton matchId={h.matchId} />
+                ) : (
+                  <span />
+                )}
               </div>
             ))}
           </div>
