@@ -45,6 +45,17 @@ function timingSafeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
+/**
+ * True when `key` is a service-role key in any format (legacy JWT or sb_secret_…; the function's own
+ * env may hold the other one). Postgres decides: only the service role may execute owned_copies().
+ */
+async function isServiceKey(key: string): Promise<boolean> {
+  const probe = createClient(SUPABASE_URL, key, { auth: { persistSession: false, autoRefreshToken: false } });
+  const nil = "00000000-0000-0000-0000-000000000000";
+  const { error } = await probe.rpc("owned_copies", { p_player: nil, p_card: nil });
+  return !error;
+}
+
 function csvEscape(value: string): string {
   return /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
 }
@@ -128,7 +139,7 @@ Deno.serve(async (req) => {
   });
   // The service-role key itself is a trusted caller (scripts/export-qr-catalog.mjs on the host PC);
   // anyone else must be a signed-in ADMIN.
-  if (!timingSafeEqual(jwt, SERVICE_ROLE_KEY)) {
+  if (!timingSafeEqual(jwt, SERVICE_ROLE_KEY) && !(await isServiceKey(jwt))) {
     const { data: { user }, error: userError } = await supabase.auth.getUser(jwt);
     if (userError || !user?.id) return errorJson(401, "Unauthorized");
 

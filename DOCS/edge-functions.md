@@ -69,8 +69,9 @@ Uses `student_roll_status()` (service role only); the roster is never exposed to
 
 ## `qr-catalog` (admin)
 
-Callers: a signed-in ADMIN, or the service-role key itself (used by `scripts/export-qr-catalog.mjs` on the
-host PC; compared in constant time). The CSV also carries `requiresUnlock`.
+Callers: a signed-in ADMIN, or a service-role key (used by `scripts/export-qr-catalog.mjs` on the host PC). The
+key is recognised by format-independent means: equal to the function's own key (constant time), or able to
+execute the service-only `owned_copies()` (the function env and `.env` may hold different key formats). The CSV also carries `requiresUnlock`.
 
 - `GET /functions/v1/qr-catalog` → one entry per card, sorted by name:
   ```json
