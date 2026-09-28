@@ -8,13 +8,14 @@
 //        card (a player gets one copy per distinct code, up to 4); entries then
 //        carry "copy": 1..4. UNLIMITED and UNIQUE cards always get one code.
 //   GET  /functions/v1/qr-catalog?format=csv   -> CSV: cardName,copy,qrContent,
-//        then tokenCore/ownershipType/rarity/oracleId for print sorting.
+//        then tokenCore/ownershipType/rarity/oracleId/requiresUnlock for print sorting.
 //   POST /functions/v1/qr-catalog/regenerate   -> ensure a claim row exists for
 //        every code (accepts ?copies too); returns { codes: n }.
 //
 // Tokens are deterministic (core = f(cardId, copy), signed with QR_SIGNING_SECRET),
 // so re-exporting always yields the same codes and new cards simply appear.
-// Copy 1 is the original one-code-per-card core. Caller must be an ADMIN.
+// Copy 1 is the original one-code-per-card core. Caller must be an ADMIN, or present the
+// service-role key (scripts/export-qr-catalog.mjs, run on a trusted machine).
 
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 import { bearer, errorJson, json, preflight, text } from "../_shared/http.ts";
@@ -32,6 +33,16 @@ interface CatalogRow {
   ownershipType: string;
   rarity: string;
   oracleId: string;
+  requiresUnlock: boolean;
+}
+
+/** Constant-time string comparison (for the service-role key check). */
+function timingSafeEqual(a: string, b: string): boolean {
+  const x = new TextEncoder().encode(a);
+  const y = new TextEncoder().encode(b);
+  let diff = x.length ^ y.length;
+  for (let i = 0; i < Math.max(x.length, y.length); i++) diff |= (x[i] ?? 0) ^ (y[i] ?? 0);
+  return diff === 0;
 }
 
 function csvEscape(value: string): string {
@@ -39,9 +50,9 @@ function csvEscape(value: string): string {
 }
 
 function toCsv(rows: CatalogRow[]): string {
-  const lines = ["cardName,copy,qrContent,tokenCore,ownershipType,rarity,oracleId"];
+  const lines = ["cardName,copy,qrContent,tokenCore,ownershipType,rarity,oracleId,requiresUnlock"];
   for (const r of rows) {
-    lines.push([r.cardName, String(r.copy), r.qrContent, r.tokenCore, r.ownershipType, r.rarity, r.oracleId]
+    lines.push([r.cardName, String(r.copy), r.qrContent, r.tokenCore, r.ownershipType, r.rarity, r.oracleId, String(r.requiresUnlock)]
       .map(csvEscape).join(","));
   }
   return lines.join("\n") + "\n";
@@ -50,7 +61,7 @@ function toCsv(rows: CatalogRow[]): string {
 async function generateCatalog(supabase: SupabaseClient, secret: string, copies: number): Promise<CatalogRow[]> {
   const { data: cards, error } = await supabase
     .from("cards")
-    .select("id, forge_name, oracle_id, rarity, ownership_type");
+    .select("id, forge_name, oracle_id, rarity, ownership_type, requires_unlock");
   if (error) throw error;
 
   // One (card, copy) pair per printed code; only UNLOCK cards get extra copies.
@@ -81,6 +92,7 @@ async function generateCatalog(supabase: SupabaseClient, secret: string, copies:
         ownershipType: card.ownership_type,
         rarity: card.rarity ?? "",
         oracleId: card.oracle_id,
+        requiresUnlock: card.requires_unlock === true,
       };
     })));
   }
@@ -114,16 +126,20 @@ Deno.serve(async (req) => {
   const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
-  const { data: { user }, error: userError } = await supabase.auth.getUser(jwt);
-  if (userError || !user?.id) return errorJson(401, "Unauthorized");
+  // The service-role key itself is a trusted caller (scripts/export-qr-catalog.mjs on the host PC);
+  // anyone else must be a signed-in ADMIN.
+  if (!timingSafeEqual(jwt, SERVICE_ROLE_KEY)) {
+    const { data: { user }, error: userError } = await supabase.auth.getUser(jwt);
+    if (userError || !user?.id) return errorJson(401, "Unauthorized");
 
-  const { data: profile, error: profileError } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", user.id)
-    .maybeSingle();
-  if (profileError) return errorJson(500, "Could not verify admin role");
-  if (!profile || profile.role !== "ADMIN") return errorJson(403, "Access Denied");
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle();
+    if (profileError) return errorJson(500, "Could not verify admin role");
+    if (!profile || profile.role !== "ADMIN") return errorJson(403, "Access Denied");
+  }
 
   try {
     const rows = await generateCatalog(supabase, secret, copies);

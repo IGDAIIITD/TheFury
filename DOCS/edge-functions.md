@@ -69,6 +69,9 @@ Uses `student_roll_status()` (service role only); the roster is never exposed to
 
 ## `qr-catalog` (admin)
 
+Callers: a signed-in ADMIN, or the service-role key itself (used by `scripts/export-qr-catalog.mjs` on the
+host PC; compared in constant time). The CSV also carries `requiresUnlock`.
+
 - `GET /functions/v1/qr-catalog` → one entry per card, sorted by name:
   ```json
   [{ "cardName": "Grizzly Bears", "qrContent": "V1.NBS8FE8VTBAA.9F3C…" }]

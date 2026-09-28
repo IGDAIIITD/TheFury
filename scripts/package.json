@@ -1,0 +1,12 @@
+{
+  "name": "campusforge-scripts",
+  "private": true,
+  "type": "module",
+  "description": "Maintenance scripts (QR catalog export, student roster, Scryfall import)",
+  "scripts": {
+    "export-qr": "node export-qr-catalog.mjs"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
+  }
+}

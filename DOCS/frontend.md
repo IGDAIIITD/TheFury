@@ -9,12 +9,12 @@ origins.
 | Route | Page | Data |
 | --- | --- | --- |
 | `/login` | roll number + first name → password, optional nickname on first sign-in (see [Sign-in](#sign-in)) | `student-auth` Edge Function, Supabase Auth |
-| `/collection` | catalog + owned cards, filters, favorites, discovery counts. Opens on **Owned**, shows the first 25 matches with a **See all** button | tables (own rows) |
+| `/collection` | catalog + owned cards, filters, favorites, discovery counts. Every tile says how the card is obtained (`lib/ownership.ts`: "Missing · scan once, unlock forever" / "scan to collect (up to 4)" / "one of a kind, first scan wins"). Opens on **Owned**, shows the first 25 matches with a **See all** button | tables (own rows) |
 | `/collection/trades` | offer / accept / decline / cancel trades; live via Realtime | trade RPCs |
 | `/collection/events` | **Open battles** (lobbies waiting for an opponent, refreshed every 5 s; **Join** opens `/battle?join=CODE`) + **battle history** (who beat whom) | `open_lobbies()`, `recent_battles()` |
 | `/decks` | deck builder with server-side validation | `decks`, `deck_cards`, `validate_deck_spec` |
 | `/battle` | deck + join-by-code + create lobby, 2-minute lobby countdown, match history (result, XP, time), the battle board | battle engine REST + WebSocket, `my_match_history()` |
-| `/scan` | camera QR scanner (jsQR) + manual 12-character entry | `claim` Edge Function |
+| `/scan` | camera QR scanner (jsQR, throttled, ignores non-card QR codes) + manual 12-character entry for spawned codes | `claim` Edge Function |
 | `/profile` | stats, badges, battle record | `my_profile_stats` |
 | `/leaderboard` | level / collection / win-rate rankings, filter by branch (CSE … EVE); most-played decks | `leaderboard_full`, `popular_decks` |
 

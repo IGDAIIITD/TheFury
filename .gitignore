@@ -47,3 +47,8 @@ battle-engine/.m2/
 
 # Legacy pre-Supabase backend + the student roster (personal data; lives in Supabase `students`)
 /backend/
+
+# QR export output (scripts/export-qr-catalog.mjs) + script deps
+/card-art/qr/
+/card-art/print-sheet.html
+/scripts/node_modules/
