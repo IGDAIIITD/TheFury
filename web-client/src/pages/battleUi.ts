@@ -539,3 +539,22 @@ export function primaryActionLabel(choice: PendingChoice): string | null {
       return null
   }
 }
+
+/**
+ * Whether a cost can be paid from the given mana: every colored pip needs its own color,
+ * and the generic part can be paid by anything left over. Assumes one mana per source
+ * (true for basic lands); used by the How to Play demo.
+ */
+export function canAfford(cost: string | null | undefined, mana: ManaAvailability): boolean {
+  let needed = 0
+  const byColor = { ...mana.byColor }
+  for (const sym of manaCostSymbols(cost)) {
+    if (sym.kind === 'generic') needed += sym.amount
+    else if (sym.kind === 'color') {
+      if (byColor[sym.color] <= 0) return false
+      byColor[sym.color] -= 1
+      needed += 1
+    } else return false
+  }
+  return needed <= mana.total
+}

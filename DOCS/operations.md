@@ -86,7 +86,7 @@ On the campus PC, from an **Administrator** PowerShell in the repo:
 | Task | Command |
 | --- | --- |
 | First install | `powershell -ExecutionPolicy Bypass -File battle-engine\battle-server.ps1 install` |
-| Is it up? | `battle-server.ps1 status` (the published URL should say **LIVE**) |
+| Is it up? | `battle-server.ps1 status` (the published URL should say **LIVE**; a red **Build** line means the running jar predates the latest engine commit: run `update`) |
 | Logs | `battle-server.ps1 logs` (files in `battle-engine\logs\`) |
 | Deploy new engine code | `git pull`, then `battle-server.ps1 update` (stop → build + tests → start) |
 | Forge patch / headless changed | `battle-engine\setup-forge.ps1 -Mvn <mvn.cmd>`, then `battle-server.ps1 update` |
@@ -166,5 +166,6 @@ Database.
 | Scans fail for everyone | `claim` smoke test above; the `QR_SIGNING_SECRET` secret still set |
 | One code fails | its `claims` row: `status`, `expires_at`, card ownership type |
 | No Battle tab | `battle-server.ps1 status`; `select value from app_config` |
+| Match history says "No log was saved" | the engine is an old build (`battle-server.ps1 status` shows a red Build line): run `update`; logs start with the next battle |
 | Battles 401 | player signed out or token expired (reload); engine JWKS load line in `engine.log` |
 | Suspected abuse | `game_log` for the player; ban them; see [security.md](security.md) |

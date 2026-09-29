@@ -252,6 +252,15 @@ switch ($Action) {
         if (-not $url) { Say 'Published: (none) - Battle tab hidden on the site' 'Yellow' }
         elseif (Test-Engine $url) { Say "Published: $url  (LIVE)" 'Green' }
         else { Say "Published: $url  (NOT answering)" 'Red' }
+        # A committed engine change does nothing until 'update' rebuilds the jar.
+        $jar = Get-ChildItem (Join-Path $here 'target\*.jar') -ErrorAction SilentlyContinue | Select-Object -First 1
+        $git = Find-Exe 'git.exe' @('C:\Users\student\AppData\Local\Programs\Git\cmd\git.exe')
+        if ($jar -and $git) {
+            $last = & $git -C $here log -1 --format=%ct -- . 2>$null
+            if ($last -and [DateTimeOffset]::FromUnixTimeSeconds([long]$last).LocalDateTime -gt $jar.LastWriteTime) {
+                Say "Build:     jar from $($jar.LastWriteTime) is OLDER than the latest engine commit - run: battle-server.ps1 update" 'Red'
+            } else { Say "Build:     jar from $($jar.LastWriteTime) (up to date)" }
+        }
     }
 
     'logs' {

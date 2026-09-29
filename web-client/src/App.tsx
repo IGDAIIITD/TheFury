@@ -10,6 +10,7 @@ import BattleUnavailable from './pages/BattleUnavailable'
 import ScanPage from './pages/ScanPage'
 import ProfilePage from './pages/ProfilePage'
 import LeaderboardPage from './pages/LeaderboardPage'
+import HowToPlayPage from './pages/HowToPlayPage'
 import Layout from './components/Layout'
 import { battleEngineConfigured } from './api/battleConfig'
 
@@ -40,6 +41,7 @@ export default function App() {
         <Route path="/scan" element={<ScanPage />} />
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/leaderboard" element={<LeaderboardPage />} />
+        <Route path="/how-to-play" element={<HowToPlayPage />} />
         <Route path="/" element={<Navigate to="/collection" replace />} />
       </Route>
     </Routes>

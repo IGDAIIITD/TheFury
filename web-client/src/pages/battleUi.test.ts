@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { MatchState, PendingChoice } from '../api/battleTypes'
 import {
   friendlyPhase,
+  canAfford,
   phaseStrip,
   instructionFor,
   matchOptionToCard,
@@ -506,5 +507,19 @@ describe('manaCostSymbols', () => {
       { kind: 'other', text: 'R/G' },
     ])
     expect(manaCostSymbols(null)).toEqual([])
+  })
+})
+
+describe('canAfford', () => {
+  const mana = (R: number, G: number) => ({ byColor: { W: 0, U: 0, B: 0, R, G, C: 0 }, floating: 0, total: R + G })
+  it('needs every colored pip plus enough total mana', () => {
+    expect(canAfford('{3}{R}', mana(1, 3))).toBe(true)
+    expect(canAfford('{3}{R}', mana(0, 4))).toBe(false)
+    expect(canAfford('{3}{R}', mana(1, 2))).toBe(false)
+    expect(canAfford('{4}{G}{G}', mana(4, 2))).toBe(true)
+    expect(canAfford('{4}{G}{G}', mana(5, 1))).toBe(false)
+  })
+  it('treats a free card as always castable', () => {
+    expect(canAfford(null, mana(0, 0))).toBe(true)
   })
 })

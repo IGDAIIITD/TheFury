@@ -84,6 +84,12 @@ export default function Layout() {
           </NavLink>
         ))}
         <span className="spacer" />
+        <NavLink to="/how-to-play" className="nav-help" title="How to play">
+          <span className="nav-help-icon" aria-hidden>
+            ?
+          </span>
+          <span className="nav-help-text">How to play</span>
+        </NavLink>
         {player && <span className="nav-player">{player.displayName} · Lv {player.level}</span>}
         <ThemeToggle />
         <button className="btn ghost" onClick={onLogout}>

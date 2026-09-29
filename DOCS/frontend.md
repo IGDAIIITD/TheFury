@@ -17,6 +17,7 @@ origins.
 | `/scan` | camera QR scanner (jsQR, throttled, ignores non-card QR codes) + manual 12-character entry for spawned codes | `claim` Edge Function |
 | `/profile` | stats, badges, battle record | `my_profile_stats` |
 | `/leaderboard` | level / collection / win-rate rankings, filter by branch (CSE … EVE); most-played decks | `leaderboard_full`, `popular_decks` |
+| `/how-to-play` | the player guide, linked from the **?** / "How to play" button in the top bar: goal and life bar, turn steps, mana and costs (an interactive land-tapping demo that greys out cards you can't afford, `canAfford`), attacking/blocking with real card art and the battle overlays, QR ownership rules, XP and decks. Built from the real battle components (`BattleCard`, `components/BattleHud.tsx`), so it stays in step with the board; update its wording when a rule changes | none (static) |
 
 Everything except `/login` requires a session (`RequireAuth` in `App.tsx`). First-time players see an
 onboarding modal.
@@ -87,7 +88,7 @@ src/
     battleEndpoints.ts       engine REST (axios)
   auth/AuthContext.tsx       session, login/register, profile
   pages/                     one component per route; battleUi.ts = pure, tested battle logic
-  components/                Layout (tabs), BattleCard, OnboardingModal
+  components/                Layout (tabs), BattleCard, BattleHud (life bar, mana panel, phase strip), OnboardingModal
   lib/                       scryfall.tsx (card art URLs), idb.ts (offline cache), colors.ts
 ```
 

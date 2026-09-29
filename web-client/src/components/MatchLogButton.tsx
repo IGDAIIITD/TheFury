@@ -36,7 +36,14 @@ export default function MatchLogButton({ matchId }: { matchId: string }) {
             {state === 'loading' && <div className="meta">Loading…</div>}
             {state === 'error' && <div className="problem">Could not load the log.</div>}
             {state === 'done' &&
-              (text ? <pre className="log-text">{text}</pre> : <div className="meta">No log was saved for this match.</div>)}
+              (text ? (
+                <pre className="log-text">{text}</pre>
+              ) : (
+                <div className="meta">
+                  No log was saved for this match. Logs are recorded for battles played after the battle server was
+                  last updated.
+                </div>
+              ))}
           </div>
         </div>
       )}

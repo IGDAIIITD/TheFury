@@ -25,5 +25,5 @@ test('says so when no log was saved', async () => {
   mocked.mockResolvedValue(null)
   render(<MatchLogButton matchId="old" />)
   fireEvent.click(screen.getByRole('button', { name: 'Log' }))
-  expect(await screen.findByText('No log was saved for this match.')).toBeInTheDocument()
+  expect(await screen.findByText(/No log was saved for this match\./)).toBeInTheDocument()
 })
