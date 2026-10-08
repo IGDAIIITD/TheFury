@@ -397,12 +397,17 @@ console.log('\n# student roster + roll-number accounts')
   await q(`insert into public.students (roll_no, name, program, batch) values
            ('2026001', 'Aadi Dhariwal', 'CSE', 2026), ('2026295', 'Mohd Rehan', 'ECE', 2026), ('2026777', 'Test Player', 'CSECON', 2026)
            on conflict do nothing`)
+  // Postgraduate roster (migration 22): MT rolls and IIITD addresses as ids.
+  await q(`insert into public.students (roll_no, name, program, batch, degree_level) values
+           ('MT26001', 'Lakshay Sharma', 'CSE', 2026, 'MTECH'),
+           ('aakankshat@iiitd.ac.in', 'Aakanksha Tewari', 'ECE', 2022, 'PHD')
+           on conflict do nothing`)
   let r = await as(db, 'anon', null, `select * from public.students`)
   check('anon cannot read the roster', !r.ok, r.error)
   r = await as(db, 'authenticated', bob, `select * from public.students`)
   check('players cannot read the roster', r.ok && r.rows.length === 0, JSON.stringify(r.rows ?? r.error))
   r = await as(db, 'authenticated', admin, `select count(*)::int as n from public.students`)
-  check('admins can read the roster', r.ok && r.rows[0].n === 3, JSON.stringify(r.rows ?? r.error))
+  check('admins can read the roster', r.ok && r.rows[0].n === 5, JSON.stringify(r.rows ?? r.error))
   for (const role of ['anon', 'authenticated']) {
     r = await as(db, role, role === 'anon' ? null : bob, `select public.student_roll_status('2026001', 'Aadi')`)
     check(`${role} cannot call student_roll_status`, !r.ok, r.error)
@@ -422,21 +427,21 @@ console.log('\n# student roster + roll-number accounts')
   check('user metadata cannot claim a roll (public sign-up)', sq[0].roll_no === null && sq[0].display_name === 'Squatter', JSON.stringify(sq))
   check('roll still NEW after the squat attempt', (await status('2026001', 'Aadi')).status === 'NEW')
 
-  const aadi = await signUp(db, '2026001@students.thefury', { display_name: 'ignored' }, { roll_no: '2026001' })
+  const aadi = await signUp(db, '2026001@students.thefury.app', { display_name: 'ignored' }, { roll_no: '2026001' })
   const p = (await q(`select display_name, degree_level, specialization, student_id, roll_no from public.profiles where id = $1`, [aadi]))[0]
   check('roll sign-up fills the profile from the roster', p.display_name === 'Aadi Dhariwal' && p.degree_level === 'BTECH' && p.specialization === 'CSE' && p.student_id === '2026001' && p.roll_no === '2026001', JSON.stringify(p))
   check('roll sign-up still gets the starter deck', (await q(`select count(*)::int as n from public.decks where player_id = $1`, [aadi]))[0].n === 1)
   check('roll becomes REGISTERED', (await status('2026001', 'Aadi')).status === 'REGISTERED')
-  const econ = await signUp(db, '2026777@students.thefury', {}, { roll_no: '2026777' })
+  const econ = await signUp(db, '2026777@students.thefury.app', {}, { roll_no: '2026777' })
   check('CSEcon roster entries map to the CSECON cohort', (await q(`select specialization from public.profiles where id = $1`, [econ]))[0].specialization === 'CSECON')
   let dup = true
-  try { await signUp(db, 'other@students.thefury', {}, { roll_no: '2026001' }) } catch { dup = false }
+  try { await signUp(db, 'other@students.thefury.app', {}, { roll_no: '2026001' }) } catch { dup = false }
   check('a roll can only have one account', !dup)
-  const ghost = await signUp(db, 'ghost@students.thefury', {}, { roll_no: '1234567' })
+  const ghost = await signUp(db, 'ghost@students.thefury.app', {}, { roll_no: '1234567' })
   check('unknown app_metadata roll is ignored, not linked', (await q(`select roll_no from public.profiles where id = $1`, [ghost]))[0].roll_no === null)
 
   // GoTrue's admin createUser inserts the user first and sets app_metadata in a follow-up UPDATE.
-  const rehan = await signUp(db, '2026295@students.thefury', { display_name: 'Mohd Rehan' })
+  const rehan = await signUp(db, '2026295@students.thefury.app', { display_name: 'Mohd Rehan' })
   check('before app_metadata arrives the account is unlinked', (await q(`select roll_no from public.profiles where id = $1`, [rehan]))[0].roll_no === null)
   await q(`update auth.users set raw_app_meta_data = raw_app_meta_data || '{"roll_no":"2026295"}' where id = $1`, [rehan])
   const rp = (await q(`select display_name, specialization, student_id, roll_no from public.profiles where id = $1`, [rehan]))[0]
@@ -457,6 +462,33 @@ console.log('\n# student roster + roll-number accounts')
   check('email players cannot attach a roll', !r.ok && r.code === '42501', r.error)
   r = await as(db, 'authenticated', bob, `update public.profiles set student_id = 'S-1' where id = $1`, [bob])
   check('email players keep editing their student id', r.ok && r.affected === 1, r.error)
+
+  check('M.Tech and PhD roster rows are accepted', (await q(`select count(*)::int as n from public.students where roll_no in ('MT26001','aakankshat@iiitd.ac.in')`))[0].n === 2)
+  for (const bad of ['20260011', 'MT260011', 'someone@gmail.com', 'a@b.com ']) {
+    let ok = true
+    try { await q(`insert into public.students (roll_no, name, program, batch) values ($1,'X','CSE',2026)`, [bad]) } catch { ok = false }
+    check(`roll "${bad.trim()}" is not a valid roster id`, !ok)
+  }
+  const cohorts = (await q(`select public.is_cohort_valid('MTECH','CB') as a, public.is_cohort_valid('MTECH','SSH') as b,
+                                    public.is_cohort_valid('PHD','SSH') as c, public.is_cohort_valid('PHD','HCD') as d,
+                                    public.is_cohort_valid('PHD','MATHEMATICS') as e, public.is_cohort_valid('PHD','EVE') as f`))[0]
+  check('cohort rules cover the postgraduate cohorts', cohorts.a && !cohorts.b && cohorts.c && cohorts.d && cohorts.e && !cohorts.f, JSON.stringify(cohorts))
+  const postgrad = async (roll, first) =>
+    (await as(db, 'service_role', null, `select public.student_roll_status($1, $2) as s`, [roll, first])).rows[0].s
+  const mt = await postgrad('mt26001', 'lakshay')
+  check('M.Tech lookup is case-insensitive and canonicalises the roll', mt.status === 'NEW' && mt.rollNo === 'MT26001' && mt.degreeLevel === 'MTECH' && mt.program === 'CSE', JSON.stringify(mt))
+  const phdStatus = await postgrad('AAKANKSHAT@IIITD.AC.IN', 'Aakanksha')
+  check('a PhD address is a roster id too', phdStatus.status === 'NEW' && phdStatus.degreeLevel === 'PHD' && phdStatus.rollNo === 'aakankshat@iiitd.ac.in', JSON.stringify(phdStatus))
+
+  const mtechUser = await signUp(db, 'MT26001@students.thefury.app', {}, { roll_no: 'MT26001' })
+  const mp = (await q(`select display_name, degree_level, specialization, student_id, roll_no from public.profiles where id = $1`, [mtechUser]))[0]
+  check('M.Tech roll sign-up fills degree, cohort and student id', mp.display_name === 'Lakshay Sharma' && mp.degree_level === 'MTECH' && mp.specialization === 'CSE' && mp.student_id === 'MT26001' && mp.roll_no === 'MT26001', JSON.stringify(mp))
+  const phdUser = await signUp(db, 'aakankshat@iiitd.ac.in', {}, { roll_no: 'aakankshat@iiitd.ac.in' })
+  const pp = (await q(`select display_name, degree_level, specialization, student_id, roll_no from public.profiles where id = $1`, [phdUser]))[0]
+  check('PhD sign-up fills degree + cohort but never exposes the address as a student id', pp.display_name === 'Aakanksha Tewari' && pp.degree_level === 'PHD' && pp.specialization === 'ECE' && pp.student_id === null && pp.roll_no === 'aakankshat@iiitd.ac.in', JSON.stringify(pp))
+  const search = async (needle) => (await as(db, 'authenticated', bob, `select display_name, student_id from public.search_players($1)`, [needle])).rows
+  check('search still finds roll players by their synthetic address', (await search('2026001')).some((r) => r.student_id === '2026001'), JSON.stringify(await search('2026001')))
+  check('search never matches a real PhD address', (await search('aakankshat')).length === 0 && (await search('@iiitd.ac.in')).length === 0, JSON.stringify(await search('aakankshat')))
 }
 
 done()
