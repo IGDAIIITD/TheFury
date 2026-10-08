@@ -120,8 +120,8 @@ Admins create events with a time window, a **bonus multiplier** (≥ 1.00) and o
 
 ## Leaderboard and cohorts
 
-- Players choose a cohort at signup: B.Tech (CSE, CSAI, CSAM, CSB, CSSS, CSD, CSECON, ECE, EVE) or M.Tech (CSE,
-  ECE). Department roll-up: ECE and EVE → **ECE**, everything else → **CSE**.
+- Players' cohort comes from the roster: B.Tech (CSE, CSAI, CSAM, CSB, CSSS, CSD, CSECON, ECE, EVE), M.Tech (CSE,
+  ECE, CB) or PhD (CSE, CB, ECE, SSH, MATHEMATICS, HCD). Department roll-up: ECE and EVE → **ECE**, everything else → **CSE**.
 - Leaderboards rank by **level** (ties by XP), **collection %** or **win rate**, filterable by degree,
   specialization or department. Banned players are excluded, and your own rank is shown even when you're
   outside the top list.

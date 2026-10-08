@@ -33,11 +33,12 @@ rest is callable only by the service role (Edge Functions, battle engine). See [
 | `game_log` | **durable, append-only history**: CLAIM, TRADE, MATCH, STARTER, SPAWN rows with XP and JSON detail | read own | game functions, `admin-spawn` |
 | `app_config` | public key/value runtime settings (`battle_engine_url`) | read (anyone) | service role, admins |
 | `match_logs` | text game log of a finished battle (Forge's log: turns, casts, combat, life), one row per match | read if you played it (admins: all) | battle engine (service role) |
-| `students` | the IIITD roster: roll number, name, program, batch, degree. **Personal data** | nothing (admins read) | `scripts/import-students.mjs` (service role) |
+| `students` | the IIITD roster: id (B.Tech roll, M.Tech `MT#####`, PhD IIITD address), name, program, batch, degree. **Personal data** | nothing (admins read) | `scripts/import-students.mjs`, `scripts/import-postgrad.mjs` (service role) |
 
 \* `profiles`: players may change `display_name` (1–40 chars), `avatar`, `student_id`, `degree_level` +
 `specialization` (must be a valid cohort), `onboarding_seen` and `last_login`. Roll accounts (`roll_no` set) keep
-the student id and cohort the roster gave them, and nobody but an admin can change `roll_no`. The `trg_profiles_guard` trigger
+the student id and cohort the roster gave them (an IIITD-address id leaves `student_id` NULL - that column is
+readable by other players, so a PhD's real address is never published), and nobody but an admin can change `roll_no`. The `trg_profiles_guard` trigger
 rejects changes to `role`, `experience`, `banned`, `banned_at`, `email`, `id` or `created` unless the caller is
 an admin or a trusted server path. `level` is always recomputed from XP.
 
@@ -55,7 +56,7 @@ events, claims, matches, unique cards and profiles.
 | `resolve_trade(trade, 'DECLINED' \| 'CANCELLED')` | receiver declines / sender cancels |
 | `list_my_trades(direction)` | `INCOMING` / `OUTGOING` (also expires stale offers) / `ALL`, as full trade JSON |
 | `player_unique_cards(player)` | a player's unique cards (to browse a trade partner) |
-| `search_players(query)` | find players by name or email (never returns email) |
+| `search_players(query)` | find players by name or by their synthetic roll address (never matches a real email, never returns one) |
 | `validate_deck_spec(format, commander, cards)` | deck-builder validation → `{ valid, problems[] }` |
 | `my_profile_stats()` | own profile stats + badges (sweeps achievements first) |
 | `leaderboard_full(metric, degree, spec, dept, limit)` | ranked rows + your rank |
@@ -77,8 +78,8 @@ RLS policies and check constraints use them.
 | `record_match_result(match, winner, condition)` | battle engine | finish a match (idempotent), XP × bonus, feed, `game_log` rows |
 | `validate_deck(deck, event)` | battle engine | match-time deck check (ownership, copies, bans, size, event sets) |
 | `grant_starter_pack(player)` | signup trigger | build the starter deck once |
-| `student_roll_status(roll, first_name)` | `student-auth` Edge Function | NOT_FOUND / NAME_MISMATCH / NEW / REGISTERED (+ roster identity once the name matched) |
-| `link_student_roll(user, roll)` | signup + `on_auth_user_roll_linked` triggers | fill an unlinked profile from the roster (name, cohort, student id, `roll_no`) |
+| `student_roll_status(roll, first_name)` | `student-auth` Edge Function | NOT_FOUND / NAME_MISMATCH / NEW / REGISTERED (+ roster identity once the name matched); the lookup is case-insensitive and `rollNo` comes back canonical |
+| `link_student_roll(user, roll)` | signup + `on_auth_user_roll_linked` triggers | fill an unlinked profile from the roster (name, cohort, student id, `roll_no`); an address-shaped id fills no student id |
 | `student_name_matches(name, typed)` | internal | typed first name = any word of the roster name, letters only, case-insensitive |
 | `owned_copies(player, card)` | internal | **the ownership rule**, used by `apply_claim` and both deck validators: UNLIMITED → unlimited if free or unlocked (else 0); UNLOCK → copies (rows); UNIQUE → serials owned |
 | `add_feed_entry(...)`, `sweep_achievements(player)`, `card_print_core(card)`, `unique_physical_uuid(core)`, `assert_active_player(player)` | internal | helpers |
@@ -135,6 +136,7 @@ service role (`scripts/download-card-art.ps1`).
 | 19 | `roll_link_on_update` | `link_student_roll()`; roster link also runs when `app_metadata.roll_no` arrives in a later UPDATE (how GoTrue admin createUser writes it) |
 | 20 | `lobby_feed_and_history` | `open_lobbies()`, `recent_battles()`, `my_match_history()`; match statuses `EXPIRED` / `CANCELLED` for lobbies |
 | 21 | `match_logs` | text game log per finished match, readable by its two players and admins |
+| 22 | `postgrad_roster` | roster id is no longer just 7 digits: accepts `MT#####` and IIITD addresses; `is_cohort_valid()` grows M.Tech `CB` and the six PhD specialisations; case-insensitive `student_roll_status()`/`link_student_roll()`; PhD ids never become `student_id` and `search_players` matches only synthetic roll addresses |
 
 **Rules for new migrations**
 

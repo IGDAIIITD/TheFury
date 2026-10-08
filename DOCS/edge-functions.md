@@ -50,7 +50,8 @@ typed by hand.
 ## `student-auth` (public)
 
 `POST /functions/v1/student-auth`, no session needed (deployed with `--no-verify-jwt`; see
-`supabase/config.toml`). Powers the roll-number login.
+`supabase/config.toml`). Powers roster-id login: a B.Tech roll (2026001), an M.Tech roll
+(MT26001) or, for PhD students the institute lists without rolls, their IIITD address.
 
 ```json
 { "action": "check", "rollNo": "2026001", "firstName": "Aadi" }
@@ -62,8 +63,14 @@ typed by hand.
   created through the admin API with `app_metadata.roll_no` (which public sign-ups can't set), and
   `handle_new_user` fills the profile from the roster. A `nickname` (2–24 letters, digits, spaces, `. _ ' -`)
   replaces the roster name as the display name.
-- Errors: 400 bad roll / short password / bad nickname, **403** first name doesn't match, **404** roll not in the roster,
-  **409** roll already registered, 429 more than 20 attempts a minute from one IP (best effort).
+- Errors: 400 malformed id / short password / bad nickname, **403** first name doesn't match, **404** id not in the roster,
+  **409** id already registered, 429 more than 20 attempts a minute from one IP (best effort).
+
+The id is looked up case-insensitively and `rollNo` in the response is the canonical roster value, which is
+what the client then signs in with. For a roll, `register` returns the synthetic `<roll>@students.thefury.app`
+address; for an IIITD address it returns that address unchanged - it is both the roster id and the sign-in email
+(`rollEmail()` in `_shared/roll.ts`, mirrored in `web-client/src/api/rollAuth.ts`). A PhD account's address never
+reaches `profiles.student_id` (see migration 22).
 
 Uses `student_roll_status()` (service role only); the roster is never exposed to the browser.
 

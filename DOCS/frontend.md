@@ -8,7 +8,7 @@ origins.
 
 | Route | Page | Data |
 | --- | --- | --- |
-| `/login` | roll number + first name → password, optional nickname on first sign-in (see [Sign-in](#sign-in)) | `student-auth` Edge Function, Supabase Auth |
+| `/login` | roster id + first name → password, optional nickname on first sign-in (see [Sign-in](#sign-in)) | `student-auth` Edge Function, Supabase Auth |
 | `/collection` | catalog + owned cards, filters, favorites, discovery counts. Every tile says how the card is obtained (`lib/ownership.ts`: "Missing · scan once, unlock forever" / "scan to collect (up to 4)" / "one of a kind, first scan wins"). Opens on **Owned**, shows the first 25 matches with a **See all** button | tables (own rows) |
 | `/collection/trades` | offer / accept / decline / cancel trades; live via Realtime | trade RPCs |
 | `/collection/events` | **Open battles** (lobbies waiting for an opponent, refreshed every 5 s; **Join** opens `/battle?join=CODE`) + **battle history** (who beat whom) | `open_lobbies()`, `recent_battles()` |
@@ -24,15 +24,17 @@ onboarding modal.
 
 ## Sign-in
 
-Students sign in with their **IIITD roll number**, not an email:
+Students sign in with their roster id, not an email: an **IIITD roll number** (B.Tech 2026001,
+M.Tech MT26001) or, for PhD students the institute lists without rolls, their **IIITD address**.
 
-1. Enter roll number + first name. `student-auth` checks them against the private `students` roster
+1. Enter roster id + first name. `student-auth` checks them against the private `students` roster
    (any word of the roster name counts, case-insensitive).
 2. **Registered** roll: enter the password. **New** roll: the page shows the roster identity (name, program,
    batch) and asks for a password (≥ 8 characters, typed twice). The function creates the account and the
    page signs in. There is no registration form: name, cohort and student id come from the roster.
 
 Roll accounts are ordinary Supabase Auth users with the synthetic email `<roll>@students.thefury.app`
+(a PhD account uses its own address instead - there is no roll to synthesise one from)
 (`api/rollAuth.ts`, same constant in `supabase/functions/_shared/roll.ts`); no mail is ever sent to it.
 A new student can also pick a **nickname** (2–24 characters), shown instead of their roster name. There is no
 email sign-in: public sign-up is disabled on the project and organisers are roll accounts promoted to admin.

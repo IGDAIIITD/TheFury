@@ -11,6 +11,7 @@ the campus PC.
 | Service-role key | repo-root `.env` (gitignored), battle engine | engine, scripts. **Never ship it to a browser.** |
 | `QR_SIGNING_SECRET` | Supabase → Edge Functions → Secrets | `claim`, `qr-catalog`, `admin-spawn` |
 | Student roster source | `backend/student-catalog/` (gitignored) | `scripts/import-students.mjs` |
+| Postgraduate roster source | `supabase/new logins/` (gitignored) | `scripts/import-postgrad.mjs` |
 | Personal access token (`sbp_…`) | root `.env` as `SUPABASE_ACCESS_TOKEN`, only while needed | Management API, function deploys |
 
 Create PATs at https://supabase.com/dashboard/account/tokens and revoke them when you're done.
@@ -121,6 +122,21 @@ node scripts/import-students.mjs "backend/student-catalog/student list.txt" --up
 The script drops commented-out rows (students the site no longer lists), keeps the newest batch for students
 listed twice, title-cases all-caps names, and writes a clean `students.json` next to the input. Keep both
 files out of git (`backend/` is gitignored). Re-running is safe (upsert by roll number).
+
+#### Postgraduates (M.Tech + PhD)
+
+Two more scrapes live in `supabase/new logins/` (gitignored, personal data): the M.Tech tables and the PhD
+profile cards. Migration 22 must be applied first - it widens `students_roll_no_check` and the cohorts.
+
+```bash
+node scripts/import-postgrad.mjs "supabase/new logins/mtech.txt" "supabase/new logins/phd.txt" --upload
+```
+
+Leave `--upload` off for a dry run: it prints the counts by degree, program and batch and writes
+`postgrad.roster.json` next to the M.Tech input (also gitignored). M.Tech ids are `MT#####` with the program
+folded to `CSE`/`ECE`/`CB` and the batch taken from the roll; the institute lists PhDs without rolls, so their
+IIITD address is both the roster id and the sign-in email (four mistyped domains are corrected on the way in).
+Re-running is safe (upsert by id).
 
 ### Reset a student's password
 

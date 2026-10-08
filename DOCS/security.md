@@ -35,7 +35,9 @@ similar fields; roll accounts also can't change their student id or cohort. `lev
 personal data: RLS with an admin-only read policy, no player grants, and it is **not in git** (the source list
 and the parsed JSON stay in the gitignored `backend/student-catalog/`). The `student-auth` function reveals a
 roll's name only after the first name matched, and a roll can be claimed only through the admin API
-(`app_metadata.roll_no`), never by a public sign-up.
+(`app_metadata.roll_no`), never by a public sign-up. The postgraduate import stores PhD IIITD addresses as
+roster ids, so `profiles.student_id` stays NULL for them and `search_players` matches only synthetic
+`<roll>@students.thefury.app` addresses: a real address is neither returned nor probeable.
 
 **Game invariants in the database.** Claims lock the claim row; trades lock the trade and all involved cards in
 sorted-UUID order (no deadlocks) and re-check ownership; match results are idempotent and the winner must be a
@@ -75,8 +77,8 @@ starter grant and spawn with XP and details. Use it for audits.
 - The claim rate limiter lives in memory per Edge Function instance, so it's best effort.
 - Quick-tunnel URLs are public; anyone can reach the engine, but everything except `/features` requires a valid
   player token.
-- `search_players` matches on email substrings (without returning email), which can confirm that an address
-  has an account.
+- `search_players` matches on the synthetic roll addresses only (and never returns an email), but a name search
+  still tells you who has an account; roster ids are guessable (see the next point).
 - Roll sign-in proves only that you know a roll number and the matching first name, which classmates also
   know: whoever registers a roll first owns it. If a student reports their roll was taken, an organiser deletes
   that auth user (Dashboard → Authentication) so they can register again. First-name guessing is slowed by a
