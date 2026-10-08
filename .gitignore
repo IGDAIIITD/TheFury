@@ -47,6 +47,9 @@ battle-engine/.m2/
 
 # Legacy pre-Supabase backend + the student roster (personal data; lives in Supabase `students`)
 /backend/
+# Scraped rosters (M.Tech/PhD) and their generated JSON: personal data, never commit
+/supabase/new logins/
+*.roster.json
 
 # QR export output (scripts/export-qr-catalog.mjs) + script deps
 /card-art/qr/
