@@ -1,15 +1,20 @@
 import { callEdgeFunction } from './supabaseClient'
 
 /**
- * Roll-number sign-in. Roll accounts are Supabase Auth users with a synthetic email
- * (never mailed). Keep ROLL_EMAIL_DOMAIN in sync with supabase/functions/_shared/roll.ts.
+ * Roster-id sign-in. B.Tech and M.Tech rolls are Supabase Auth users with a synthetic
+ * email (never mailed); PhD students have no roll number, so their IIITD address is both
+ * the roster id and the sign-in email. Keep ROLL_EMAIL_DOMAIN in sync with
+ * supabase/functions/_shared/roll.ts and rollEmail() identical to it.
  */
 export const ROLL_EMAIL_DOMAIN = 'students.thefury.app'
 
-export const ROLL_RE = /^[0-9]{7}$/
+export const ROLL_RE = /^(\d{7}|MT\d{5}|[^@\s]+@iiitd\.ac\.in)$/i
+
+const ROLL_ID_RE = /^(\d{7}|MT\d{5})$/i
 
 export function rollEmail(rollNo: string): string {
-  return `${rollNo.trim()}@${ROLL_EMAIL_DOMAIN}`
+  const id = rollNo.trim().toLowerCase()
+  return ROLL_ID_RE.test(id) ? `${id}@${ROLL_EMAIL_DOMAIN}` : id
 }
 
 export interface RollStatus {
@@ -22,15 +27,15 @@ export interface RollStatus {
 }
 
 /**
- * Check a roll number + first name against the student roster (student-auth Edge
- * Function). Throws EdgeFunctionError: 404 unknown roll, 403 name mismatch, 429 too many tries.
+ * Check a roster id + first name against the student roster (student-auth Edge
+ * Function). Throws EdgeFunctionError: 404 unknown id, 403 name mismatch, 429 too many tries.
  */
 export function checkRoll(rollNo: string, firstName: string): Promise<RollStatus> {
   return callEdgeFunction<RollStatus>('student-auth', { action: 'check', rollNo: rollNo.trim(), firstName })
 }
 
 /**
- * Create the account for a NEW roll with the chosen password and an optional nickname
+ * Create the account for a NEW id with the chosen password and an optional nickname
  * (shown instead of the roster name); returns its sign-in email.
  */
 export async function registerRoll(

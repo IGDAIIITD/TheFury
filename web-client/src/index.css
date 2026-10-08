@@ -1131,6 +1131,7 @@ textarea:focus {
 .auth-who .meta {
   color: var(--muted);
   font-size: 13px;
+  overflow-wrap: anywhere; /* PhD roster ids are full IIITD addresses */
 }
 
 .auth-footer {

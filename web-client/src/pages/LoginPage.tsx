@@ -7,16 +7,18 @@ import ThemeToggle from '../components/ThemeToggle'
 
 /**
  * Sign-in for The Fury.
- *   1. identify: roll number + first name, checked against the IIITD student roster
+ *   1. identify: roster id + first name, checked against the IIITD student roster
  *   2. password: log in (REGISTERED) or choose a password (NEW; the profile is filled
  *      from the roster, so there's nothing else to fill in)
- * Every account is a roll account; organisers are roll accounts promoted to admin.
+ * The roster id is a roll number (B.Tech 2026001, M.Tech MT26001) or, for PhD students
+ * the institute lists without rolls, their IIITD address. Every account is a roll
+ * account; organisers are roll accounts promoted to admin.
  */
 type Step = 'identify' | 'password'
 
 const MIN_PASSWORD = 8
 
-const DEGREE_LABEL: Record<string, string> = { BTECH: 'B.Tech', MTECH: 'M.Tech' }
+const DEGREE_LABEL: Record<string, string> = { BTECH: 'B.Tech', MTECH: 'M.Tech', PHD: 'PhD' }
 
 function errorText(err: unknown, fallback: string): string {
   const e = err as { status?: number; message?: string } | null
@@ -62,12 +64,12 @@ export default function LoginPage() {
   const identify = (e: React.FormEvent) => {
     e.preventDefault()
     const roll = rollNo.trim()
-    if (!ROLL_RE.test(roll)) return setError('Roll numbers are 7 digits, e.g. 2026001.')
+    if (!ROLL_RE.test(roll)) return setError('Enter a roll number (2026001 or MT26001) or your IIITD email.')
     if (!firstName.trim()) return setError('Enter your first name.')
     return run(async () => {
       setStudent(await checkRoll(roll, firstName.trim()))
       go('password')
-    }, 'Could not check your roll number.')
+    }, 'Could not check the student list.')
   }
 
   const submitPassword = (e: React.FormEvent) => {
@@ -104,15 +106,14 @@ export default function LoginPage() {
         {step === 'identify' && (
           <form onSubmit={identify} noValidate>
             <div className="field">
-              <label htmlFor="roll">Roll number</label>
+              <label htmlFor="roll">Roll number or IIITD email</label>
               <input
                 id="roll"
                 className="roll"
                 value={rollNo}
-                onChange={(e) => setRollNo(e.target.value.replace(/\D/g, '').slice(0, 7))}
-                inputMode="numeric"
+                onChange={(e) => setRollNo(e.target.value.replace(/[^\p{L}\p{N}@._+\-']/gu, '').slice(0, 254))}
                 autoComplete="username"
-                placeholder="2026001"
+                placeholder="2026001 · MT26001 · you@iiitd.ac.in"
                 autoFocus
               />
             </div>

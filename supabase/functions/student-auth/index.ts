@@ -6,8 +6,12 @@
 //          { "action": "register", "rollNo": "2026001", "firstName": "Aadi", "password": "…",
 //            "nickname": "optional display name" }
 //            -> 201 { email }   (the client then signs in with email + password)
-// Errors:  400 bad input / weak password / bad nickname, 403 first name doesn't match, 404 roll not in the
-//          roster, 409 roll already registered, 429 rate limited.
+// Errors:  400 bad input / weak password / bad nickname, 403 first name doesn't match, 404 id not in the
+//          roster, 409 id already registered, 429 rate limited.
+//
+// `rollNo` is a roster id: a B.Tech roll (2026001), an M.Tech roll (MT26001) or, for PhDs the
+// institute lists without rolls, their IIITD address - in which case that address is also the
+// sign-in email (rollEmail passes it through instead of appending the synthetic domain).
 //
 // The roster (`students`) and student_roll_status() are service-role only. Accounts are
 // created through the admin API with app_metadata.roll_no, which a public sign-up can't set;
@@ -21,7 +25,8 @@ import { rollEmail } from "../_shared/roll.ts";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-const ROLL_RE = /^[0-9]{7}$/;
+// Roster id: B.Tech roll, M.Tech roll, or a PhD's IIITD address (see header).
+const ROLL_RE = /^(\d{7}|MT\d{5}|[^@\s]+@iiitd\.ac\.in)$/i;
 const MIN_PASSWORD = 8;
 // Optional display name chosen at sign-up (otherwise the roster name is shown).
 const NICKNAME_RE = /^[\p{L}\p{N}][\p{L}\p{N} ._'-]{1,23}$/u;
@@ -63,23 +68,28 @@ Deno.serve(async (req) => {
   }
   const rollNo = String(body.rollNo ?? "").trim();
   const firstName = String(body.firstName ?? "").trim();
-  if (!ROLL_RE.test(rollNo)) return errorJson(400, "Roll numbers are 7 digits, e.g. 2026001.");
+  if (!ROLL_RE.test(rollNo)) {
+    return errorJson(400, "Enter a roll number (2026001 or MT26001) or your IIITD email.");
+  }
   if (!firstName) return errorJson(400, "Enter your first name.");
 
   const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } });
   const { data, error } = await admin.rpc("student_roll_status", { p_roll: rollNo, p_first_name: firstName });
   if (error) {
     console.error("student_roll_status failed", error.message);
-    return errorJson(500, "Could not check the roll number. Try again.");
+    return errorJson(500, "Could not check the student list. Try again.");
   }
   const status = data as RollStatus;
-  if (status.status === "NOT_FOUND") return errorJson(404, "That roll number isn't in the student list.");
-  if (status.status === "NAME_MISMATCH") return errorJson(403, "That first name doesn't match this roll number.");
+  if (status.status === "NOT_FOUND") return errorJson(404, "That roll number or email isn't in the student list.");
+  if (status.status === "NAME_MISMATCH") return errorJson(403, "That first name doesn't match the student list.");
+  // The roster value is canonical (MT26001, lower-cased address); everything below uses it, so
+  // typing "mt26001" still links and still signs in with the address the account was created with.
+  const id = status.rollNo?.trim() || rollNo;
 
   if (body.action === "check") return json(200, status);
   if (body.action !== "register") return errorJson(400, 'action must be "check" or "register".');
 
-  if (status.status === "REGISTERED") return errorJson(409, "This roll number already has an account. Log in instead.");
+  if (status.status === "REGISTERED") return errorJson(409, "There's already an account for this. Log in instead.");
   const password = String(body.password ?? "");
   if (password.length < MIN_PASSWORD) {
     return errorJson(400, `Choose a password of at least ${MIN_PASSWORD} characters.`);
@@ -90,28 +100,28 @@ Deno.serve(async (req) => {
     return errorJson(400, "Nicknames are 2–24 letters, numbers, spaces or . _ ' -");
   }
 
-  const email = rollEmail(rollNo);
+  const email = rollEmail(id);
   const created = await admin.auth.admin.createUser({
     email,
     password,
     email_confirm: true,
-    app_metadata: { roll_no: rollNo },
+    app_metadata: { roll_no: id },
     user_metadata: { display_name: status.name },
   });
   if (created.error) {
-    // Lost a race with another registration for the same roll.
+    // Lost a race with another registration for the same id.
     if (/already|exists|registered/i.test(created.error.message)) {
-      return errorJson(409, "This roll number already has an account. Log in instead.");
+      return errorJson(409, "There's already an account for this. Log in instead.");
     }
     console.error("createUser failed", created.error.message);
     return errorJson(500, "Could not create the account. Try again.");
   }
 
   // The roster link happens in a trigger (migration 19). Never leave an unlinked account behind:
-  // it would hold the synthetic email while the roll still reads as NEW.
+  // it would hold the sign-in address while the id still reads as NEW.
   const userId = created.data.user?.id;
   const { data: profile } = await admin.from("profiles").select("roll_no").eq("id", userId).maybeSingle();
-  if (profile?.roll_no !== rollNo) {
+  if (profile?.roll_no !== id) {
     console.error("roll link missing for new user", userId);
     if (userId) await admin.auth.admin.deleteUser(userId);
     return errorJson(500, "Could not create the account. Try again.");

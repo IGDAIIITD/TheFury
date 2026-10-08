@@ -11,12 +11,14 @@ vi.mock('../auth/AuthContext', () => ({
 }))
 
 vi.mock('../api/rollAuth', () => ({
-  ROLL_RE: /^[0-9]{7}$/,
+  ROLL_RE: /^(\d{7}|MT\d{5}|[^@\s]+@iiitd\.ac\.in)$/i,
   checkRoll: vi.fn(),
 }))
 
 const mockedUseAuth = useAuth as unknown as ReturnType<typeof vi.fn>
 const mockedCheckRoll = checkRoll as unknown as ReturnType<typeof vi.fn>
+
+const ROLL_LABEL = 'Roll number or IIITD email'
 
 const AADI = {
   rollNo: '2026001',
@@ -46,28 +48,34 @@ function renderPage() {
 }
 
 function identify(roll = '2026001', first = 'Aadi') {
-  fireEvent.change(screen.getByLabelText('Roll number'), { target: { value: roll } })
+  fireEvent.change(screen.getByLabelText(ROLL_LABEL), { target: { value: roll } })
   fireEvent.change(screen.getByLabelText('First name'), { target: { value: first } })
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
 }
 
-test('asks for roll number and first name, never an email or cohort', () => {
+test('asks for a roster id and first name, never a password or cohort', () => {
   const { container } = renderPage()
   expect(screen.getByText('The Fury')).toBeInTheDocument()
-  expect(screen.getByLabelText('Roll number')).toBeInTheDocument()
+  expect(screen.getByLabelText(ROLL_LABEL)).toBeInTheDocument()
   expect(screen.getByLabelText('First name')).toBeInTheDocument()
   expect(screen.queryByLabelText(/password/i)).not.toBeInTheDocument()
   expect(container.querySelectorAll('select').length).toBe(0)
   expect(screen.queryByText(/campus forge/i)).not.toBeInTheDocument()
 })
 
-test('keeps only digits in the roll number and rejects short rolls locally', () => {
+test('accepts B.Tech / M.Tech rolls and IIITD addresses, rejects junk locally', () => {
   renderPage()
-  const roll = screen.getByLabelText('Roll number') as HTMLInputElement
-  fireEvent.change(roll, { target: { value: '20a26-0012345' } })
+  const roll = screen.getByLabelText(ROLL_LABEL) as HTMLInputElement
+  fireEvent.change(roll, { target: { value: '2026001' } })
   expect(roll.value).toBe('2026001')
+  fireEvent.change(roll, { target: { value: ' mt26001 ' } })
+  expect(roll.value).toBe('mt26001')
+  fireEvent.change(roll, { target: { value: 'Aakanksha.T@iiitd.ac.in' } })
+  expect(roll.value).toBe('Aakanksha.T@iiitd.ac.in')
+  fireEvent.change(roll, { target: { value: '20a26-0012345!' } })
+  expect(roll.value).toBe('20a26-0012345')
   identify('20260', 'Aadi')
-  expect(screen.getByRole('alert')).toHaveTextContent('7 digits')
+  expect(screen.getByRole('alert')).toHaveTextContent('IIITD email')
   expect(mockedCheckRoll).not.toHaveBeenCalled()
 })
 
@@ -118,10 +126,29 @@ test('a wrong password gets a friendly message', async () => {
   await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Wrong password'))
 })
 
-test('there is no email sign-in at all', () => {
+test('there is no password-less email sign-in', () => {
   renderPage()
   expect(screen.queryByRole('button', { name: /staff/i })).not.toBeInTheDocument()
-  expect(screen.queryByLabelText(/email/i)).not.toBeInTheDocument()
+  expect(screen.queryByLabelText('Email address')).not.toBeInTheDocument()
+  expect(screen.queryByLabelText(/password/i)).not.toBeInTheDocument()
+})
+
+test('a PhD signs in with their IIITD address', async () => {
+  mockedCheckRoll.mockResolvedValue({
+    rollNo: 'aakanksha.t@iiitd.ac.in',
+    name: 'Aakanksha Tewari',
+    program: 'ECE',
+    degreeLevel: 'PHD',
+    batch: 2022,
+    status: 'REGISTERED',
+  })
+  renderPage()
+  identify('Aakanksha.T@iiitd.ac.in', 'Aakanksha')
+  await screen.findByText('Aakanksha Tewari')
+  expect(screen.getByText(/PhD ECE/)).toBeInTheDocument()
+  fireEvent.change(await screen.findByLabelText('Password'), { target: { value: 'dragons12' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Log in' }))
+  await waitFor(() => expect(auth.loginWithRoll).toHaveBeenCalledWith('aakanksha.t@iiitd.ac.in', 'dragons12'))
 })
 
 test('a NEW roll can pick an optional nickname', async () => {
