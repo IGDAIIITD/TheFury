@@ -38,7 +38,7 @@ export default function ProfilePage() {
     const boot = async () => {
       if (profileId) {
         try {
-          const pub = await getPublicProfile(profileId)
+          const pub = await getPublicProfile(profileId || "")
           if (!mounted) return
           if (!pub) {
             setError('Profile not found.')
