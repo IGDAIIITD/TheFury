@@ -24,7 +24,7 @@ export default function ProfilePage() {
   const [refreshing, setRefreshing] = useState(false)
   const params = useParams<any>()
   const queryId = new URLSearchParams(window.location.search).get('id')
-  const profileId = (params && (params as any).id) || queryId || null
+  const profileId = (params && (params as any).id) || queryId || (window.location.pathname.includes("/profile/") && window.location.pathname.split("/").pop()) || null
 
   const load = useCallback(async () => {
     const fresh = await getMyStats()
