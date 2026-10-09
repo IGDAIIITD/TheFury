@@ -50,6 +50,7 @@ const stats: ProfileStatsDto = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  window.history.replaceState({}, '', '/profile')
   mockedUseAuth.mockReturnValue({
     player: stats.player,
     token: 'x',
@@ -84,4 +85,22 @@ test('refresh button reloads stats and player', async () => {
   fireEvent.click(screen.getByText('Refresh'))
 
   await waitFor(() => expect(mockedEndpoints.getProfileStats).toHaveBeenCalledTimes(2))
+})
+
+test('renders the selected player profile instead of the signed-in player', async () => {
+  window.history.replaceState({}, '', '/profile?id=p2')
+  mockedEndpoints.getProfileStats.mockResolvedValue({
+    ...stats,
+    player: { ...stats.player, id: 'p2', displayName: 'Opponent' },
+  })
+
+  render(<ProfilePage />)
+
+  expect(await screen.findByRole('heading', { name: 'Opponent' })).toBeInTheDocument()
+  expect(screen.getByText('B.Tech · CSAI')).toBeInTheDocument()
+  expect(screen.getByText('84%')).toBeInTheDocument()
+  expect(screen.getByText('24–12')).toBeInTheDocument()
+  expect(screen.getByText('First Discovery')).toBeInTheDocument()
+  expect(mockedEndpoints.getProfileStats).toHaveBeenCalledWith('p2')
+  expect(screen.queryByRole('heading', { name: 'BattleTest' })).not.toBeInTheDocument()
 })

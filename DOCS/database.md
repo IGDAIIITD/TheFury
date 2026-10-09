@@ -58,7 +58,7 @@ events, claims, matches, unique cards and profiles.
 | `player_unique_cards(player)` | a player's unique cards (to browse a trade partner) |
 | `search_players(query)` | find players by name or by their synthetic roll address (never matches a real email, never returns one) |
 | `validate_deck_spec(format, commander, cards)` | deck-builder validation → `{ valid, problems[] }` |
-| `my_profile_stats()` | own profile stats + badges (sweeps achievements first) |
+| `my_profile_stats(player?)` | your own profile stats + badges, or another player's public stats and badges (private email and student ID are hidden; sweeps achievements first) |
 | `leaderboard_full(metric, degree, spec, dept, limit)` | ranked rows + your rank |
 | `popular_decks(limit)`, `active_buildings(limit)` | global analytics |
 | `achievement_catalog()` | the 12 achievements |

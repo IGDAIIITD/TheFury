@@ -26,7 +26,8 @@ New functions must declare their grants explicitly. Before this, `apply_claim` a
 callable with the public key.
 
 **Actor from the token, never a parameter.** Client RPCs use `auth.uid()` and reject NULL.
-`my_profile_stats(p)` refuses other players (it returns email) unless the caller is an admin.
+`my_profile_stats(p)` allows signed-in players to view another player's public profile stats, but hides
+email and student ID; only the owner, admins and service role receive those private fields.
 
 **Profile guard.** A trigger blocks players from changing `role`, `experience`, `banned`, `email`, `roll_no` and
 similar fields; roll accounts also can't change their student id or cohort. `level` is always derived from XP.

@@ -144,11 +144,21 @@ console.log('\n# trades')
 console.log('\n# stats / analytics')
 {
   let r = await as(db, 'authenticated', alice, `select public.my_profile_stats($1)`, [bob])
-  check("player cannot read another player's stats/email", !r.ok && r.code === 'CF403', r.error)
+  check('player can read another player public stats without private fields',
+    r.ok
+      && r.rows[0].my_profile_stats.player.displayName === 'Bob'
+      && r.rows[0].my_profile_stats.player.email === null
+      && r.rows[0].my_profile_stats.player.studentId === null
+      && typeof r.rows[0].my_profile_stats.battleStats.played === 'number'
+      && typeof r.rows[0].my_profile_stats.collectionCompletionPercent === 'number'
+      && Array.isArray(r.rows[0].my_profile_stats.badges),
+    r.error || JSON.stringify(r.rows?.[0]))
   r = await as(db, 'authenticated', admin, `select public.my_profile_stats($1)->'player'->>'email' as e`, [bob])
   check('admin can read any stats', r.ok && r.rows[0].e === 'bob@campus.edu', r.error)
   r = await as(db, 'authenticated', alice, `select public.my_profile_stats() as s`)
-  check('own stats include favorite colors', r.ok && Array.isArray(r.rows[0].s.favoriteColors), r.error)
+  check('own stats include private fields and favorite colors',
+    r.ok && r.rows[0].s.player.email === 'alice@campus.edu' && Array.isArray(r.rows[0].s.favoriteColors),
+    r.error)
   r = await as(db, 'anon', null, `select count(*)::int as n from public.activity_feed`)
   check('anon cannot read the feed', r.ok && r.rows[0].n === 0, JSON.stringify(r))
   r = await as(db, 'authenticated', bob, `select count(*)::int as n from public.activity_feed`)

@@ -1,6 +1,6 @@
 export interface Player {
   id: string
-  email: string
+  email: string | null
   displayName: string
   role: string
   avatar: string | null
@@ -204,4 +204,3 @@ export interface PlayerSummaryDto {
   degreeLevel: string | null
   specialization: string | null
 }
-

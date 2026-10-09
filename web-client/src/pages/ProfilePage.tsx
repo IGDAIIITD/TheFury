@@ -92,7 +92,7 @@ export default function ProfilePage() {
   if (error) return <div className="page empty">{error}</div>
   if (!stats) return null
 
-  const displayName = player?.displayName ?? stats.player.displayName
+  const displayName = profileId ? stats.player.displayName : player?.displayName ?? stats.player.displayName
   const initials = displayName
     .split(' ')
     .filter(Boolean)
