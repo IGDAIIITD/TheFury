@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { getProfileStats } from '../api/endpoints'
+import { getProfileStats from '../api/endpoints'
 import { useAuth } from '../auth/AuthContext'
 import { CACHE_KEYS, cacheGet, cacheSet } from '../lib/idb'
 import { swatchBg, swatchFg } from '../lib/colors'
