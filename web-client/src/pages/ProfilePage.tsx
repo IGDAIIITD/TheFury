@@ -47,7 +47,7 @@ export default function ProfilePage() {
           }
           // build minimal stats shape for public view
           setStats({
-            player: pub,
+            player: pub as any,
             experience: pub.experience,
             level: pub.level,
             experienceToNextLevel: Math.max(0, pub.level * 100 - pub.experience),
