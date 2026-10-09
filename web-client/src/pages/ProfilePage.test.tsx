@@ -11,12 +11,12 @@ vi.mock('../auth/AuthContext', () => ({
 }))
 
 vi.mock('../api/endpoints', () => ({
-  getMyStats: vi.fn(),
+  getProfileStats: vi.fn(),
 }))
 
 const mockedUseAuth = useAuth as unknown as ReturnType<typeof vi.fn>
 const mockedEndpoints = endpoints as {
-  getMyStats: ReturnType<typeof vi.fn>
+  getProfileStats: ReturnType<typeof vi.fn>
 }
 
 const stats: ProfileStatsDto = {
@@ -58,7 +58,7 @@ beforeEach(() => {
     refreshPlayer: vi.fn().mockResolvedValue(stats.player),
     logout: vi.fn(),
   })
-  mockedEndpoints.getMyStats.mockResolvedValue(stats)
+  mockedEndpoints.getProfileStats.mockResolvedValue(stats)
 })
 
 test('renders player stats, xp bar and badges', async () => {
@@ -83,5 +83,5 @@ test('refresh button reloads stats and player', async () => {
 
   fireEvent.click(screen.getByText('Refresh'))
 
-  await waitFor(() => expect(mockedEndpoints.getMyStats).toHaveBeenCalledTimes(2))
+  await waitFor(() => expect(mockedEndpoints.getProfileStats).toHaveBeenCalledTimes(2))
 })

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { getMyStats, getProfileStats } from '../api/endpoints'
+import { getProfileStats, getProfileStats } from '../api/endpoints'
 import { useAuth } from '../auth/AuthContext'
 import { CACHE_KEYS, cacheGet, cacheSet } from '../lib/idb'
 import { swatchBg, swatchFg } from '../lib/colors'
@@ -27,7 +27,7 @@ export default function ProfilePage() {
   const profileId = (params && (params as any).id) || queryId || (window.location.pathname.includes("/profile/") ? window.location.pathname.split("/").pop() || null : null) || null
 
   const load = useCallback(async () => {
-    const fresh = await getMyStats()
+    const fresh = await getProfileStats()
     setStats(fresh)
     void cacheSet(CACHE_KEYS.stats, fresh)
     await refreshPlayer()
@@ -59,7 +59,7 @@ export default function ProfilePage() {
       const cached = await cacheGet<ProfileStatsDto>(CACHE_KEYS.stats)
       if (mounted && cached) setStats(cached)
       try {
-        const fresh = await getMyStats()
+        const fresh = await getProfileStats()
         if (!mounted) return
         setStats(fresh)
         void cacheSet(CACHE_KEYS.stats, fresh)
