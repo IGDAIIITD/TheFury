@@ -22,9 +22,9 @@ export default function ProfilePage() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const params = useParams()
+  const params = useParams<any>()
   const queryId = new URLSearchParams(window.location.search).get('id')
-  const profileId = params.id || queryId || null
+  const profileId = params?.id || queryId || null
 
   const load = useCallback(async () => {
     const fresh = await getMyStats()
