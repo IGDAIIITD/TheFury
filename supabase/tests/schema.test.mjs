@@ -20,6 +20,25 @@ await db.query(`update public.profiles set role = 'ADMIN' where id = $1`, [admin
 console.log('\n# idempotency')
 {
   const mig = join(REPO, 'supabase/migrations')
+  const migration20 = readFileSync(join(mig, '20260926000020_lobby_feed_and_history.sql'), 'utf8')
+  await db.exec(`
+    drop function public.recent_battles(int);
+    create function public.recent_battles(p_limit int default 30)
+    returns table (match_id uuid, winner_name text, loser_name text, win_condition text, ended_at timestamptz)
+    language sql stable security definer set search_path = public
+    as $$ select null::uuid, null::text, null::text, null::text, null::timestamptz where false $$;
+  `)
+  let legacySignatureRepaired = true
+  try {
+    await db.exec(migration20)
+    const result = await as(db, 'authenticated', alice, `select winner_id, loser_id from public.recent_battles(1)`)
+    if (!result.ok) throw new Error(result.error)
+  } catch (e) {
+    legacySignatureRepaired = false
+    console.log('   migration 20 legacy recent_battles signature:', e.message)
+  }
+  check('migration 20 replaces the pre-23 recent_battles return shape', legacySignatureRepaired)
+
   const idem = readdirSync(mig).filter((f) => f >= '20260924000011').sort()
   let ok = true
   for (const f of idem) {

@@ -117,6 +117,7 @@ invalid token), **404** (unknown match or path), **409** (lobby no longer open),
   identical cards are two distinct options.
 - Act: send to `/app/match/{matchId}/action`:
   `{ "actionType": "CHOICE", "payload": { "requestId": 12, "selectedIndices": [0] } }`.
+  Each request ID is single-use; duplicate and late answers are ignored rather than applied to a later prompt.
 
 ### Match lifecycle
 

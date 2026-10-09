@@ -51,6 +51,7 @@ import java.util.function.Function;
 public class HumanPlayerController extends PlayerControllerAi {
 
     private final AtomicLong requestSeq = new AtomicLong();
+    private final AtomicLong lastAnsweredRequestId = new AtomicLong();
     private final AtomicBoolean aiFallback = new AtomicBoolean(false);
     private volatile boolean passNextPlay = false;
     private final BlockingQueue<Choice> responses = new LinkedBlockingQueue<>();
@@ -78,11 +79,22 @@ public class HumanPlayerController extends PlayerControllerAi {
      */
     public boolean submitChoice(long requestId, List<Integer> selectedIndices) {
         ChoiceRequest req = pendingRequest;
-        if (req == null || req.getId() != requestId) {
+        if (req == null || req.getId() != requestId || !markResponseSubmitted(lastAnsweredRequestId, requestId)) {
             return false;
         }
         responses.offer(new Choice(requestId, selectedIndices == null ? new ArrayList<>() : selectedIndices));
         return true;
+    }
+
+    static boolean markResponseSubmitted(AtomicLong lastAnsweredRequestId, long requestId) {
+        long previous = lastAnsweredRequestId.get();
+        while (requestId > previous) {
+            if (lastAnsweredRequestId.compareAndSet(previous, requestId)) {
+                return true;
+            }
+            previous = lastAnsweredRequestId.get();
+        }
+        return false;
     }
 
     /** Permanently hands all future decisions to the AI (disconnect grace expiry). */
@@ -101,7 +113,7 @@ public class HumanPlayerController extends PlayerControllerAi {
         onChoiceRequested.run();
         try {
             while (true) {
-                Choice c = responses.poll(100, TimeUnit.MILLISECONDS);
+                Choice c = pollResponse(responses, req.getId());
                 if (c != null) {
                     return c;
                 }
@@ -114,6 +126,15 @@ public class HumanPlayerController extends PlayerControllerAi {
             return null;
         } finally {
             pendingRequest = null;
+        }
+    }
+
+    static Choice pollResponse(BlockingQueue<Choice> responses, long requestId) throws InterruptedException {
+        while (true) {
+            Choice response = responses.poll(100, TimeUnit.MILLISECONDS);
+            if (response == null || response.getRequestId() == requestId) {
+                return response;
+            }
         }
     }
 

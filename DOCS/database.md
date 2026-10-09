@@ -63,7 +63,7 @@ events, claims, matches, unique cards and profiles.
 | `popular_decks(limit)`, `active_buildings(limit)` | global analytics |
 | `achievement_catalog()` | the 12 achievements |
 | `open_lobbies()` | lobbies waiting for an opponent (under 2 minutes old): code, host name, expiry, `mine` |
-| `recent_battles(n)` | finished battles across campus: winner, loser, time (a bot win reads "Campus Bot") |
+| `recent_battles(n)` | finished battles across campus: winner/loser IDs and names, time (a bot win reads "Campus Bot") |
 | `my_match_history(n)` | the caller's matches: `WON`/`LOST`/`DRAW`/`ACTIVE`/`WAITING`/`EXPIRED`/`CANCELLED`, XP earned, time |
 
 `is_admin()`, `compute_level()`, `is_cohort_valid()` and `department_of()` are also callable by everyone, because

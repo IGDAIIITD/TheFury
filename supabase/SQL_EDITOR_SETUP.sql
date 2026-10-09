@@ -4696,9 +4696,13 @@ $$;
 revoke execute on function public.open_lobbies() from public, anon, authenticated;
 grant execute on function public.open_lobbies() to authenticated;
 
-create or replace function public.recent_battles(p_limit int default 30)
+drop function if exists public.recent_battles(int);
+
+create function public.recent_battles(p_limit int default 30)
 returns table (
     match_id      uuid,
+    winner_id     uuid,
+    loser_id      uuid,
     winner_name   text,
     loser_name    text,
     win_condition text,
@@ -4715,6 +4719,12 @@ begin
     end if;
     return query
     select m.id,
+           m.winner_id,
+           case
+               when m.winner_id is null then coalesce(m.player1_id, m.player2_id)
+               when m.winner_id = m.player1_id then m.player2_id
+               else m.player1_id
+           end,
            -- a null winner in a bot match means the bot won; player2 null = the bot
            coalesce(w.display_name, case when m.player2_id is null then 'Campus Bot' end),
            case
