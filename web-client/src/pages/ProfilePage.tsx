@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { getMyStats, getPublicProfile } from '../api/endpoints'
+import { getMyStats, getProfileStats } from '../api/endpoints'
 import { useAuth } from '../auth/AuthContext'
 import { CACHE_KEYS, cacheGet, cacheSet } from '../lib/idb'
 import { swatchBg, swatchFg } from '../lib/colors'
@@ -38,28 +38,14 @@ export default function ProfilePage() {
     const boot = async () => {
       if (profileId) {
         try {
-          const pub = await getPublicProfile(profileId)
+          const pub = await getProfileStats(profileId)
           if (!mounted) return
           if (!pub) {
             setError('Profile not found.')
             setLoading(false)
             return
           }
-          // build minimal stats shape for public view
-          setStats({
-            player: pub as any,
-            experience: pub.experience,
-            level: pub.level,
-            experienceToNextLevel: Math.max(0, pub.level * 100 - pub.experience),
-            collectionCompletionPercent: 0,
-            ownedCards: 0,
-            totalCards: 0,
-            totalDiscoveries: 0,
-            favoriteColors: [],
-            buildingsVisited: [],
-            battleStats: { played: 0, wins: 0, losses: 0, winRatePercent: 0 },
-            badges: [],
-          })
+          setStats(pub)
           setLoading(false)
           return
         } catch {

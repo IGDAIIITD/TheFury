@@ -359,9 +359,10 @@ export async function getPublicProfile(playerId: string): Promise<ProfileStatsDt
   return data as ProfileStatsDto['player']
 }
 
-export async function getMyStats(): Promise<ProfileStatsDto> {
-  const { data, error } = await supabase.rpc('my_profile_stats')
+export async function getProfileStats(playerId?: string): Promise<ProfileStatsDto | null> {
+  const { data, error } = await supabase.rpc('my_profile_stats', { p_player: playerId ?? null })
   if (error) fail(error, 'Could not load stats')
+  if (!data) return null
   return data as ProfileStatsDto
 }
 
