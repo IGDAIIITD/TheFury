@@ -1,4 +1,5 @@
 import '@testing-library/jest-dom'
+import { MemoryRouter } from "react-router-dom"
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { vi } from 'vitest'
 import LeaderboardPage from './LeaderboardPage'
@@ -62,7 +63,7 @@ beforeEach(() => {
 })
 
 test('renders ranked rows and highlights the current player', async () => {
-  render(<LeaderboardPage />)
+  render(<MemoryRouter><LeaderboardPage /></MemoryRouter>)
 
   expect(await screen.findByText('Opponent')).toBeInTheDocument()
   expect(screen.getByText('Your rank: #1')).toBeInTheDocument()
@@ -74,7 +75,7 @@ test('renders ranked rows and highlights the current player', async () => {
 })
 
 test('switching metric reloads with the new metric and no cohort filter', async () => {
-  render(<LeaderboardPage />)
+  render(<MemoryRouter><LeaderboardPage /></MemoryRouter>)
   await screen.findByText('Opponent')
 
   fireEvent.click(screen.getByText('Win Rate'))
@@ -83,7 +84,7 @@ test('switching metric reloads with the new metric and no cohort filter', async 
 })
 
 test('selecting a branch filters by that specialization, any degree', async () => {
-  render(<LeaderboardPage />)
+  render(<MemoryRouter><LeaderboardPage /></MemoryRouter>)
   await screen.findByText('Opponent')
 
   fireEvent.click(screen.getByRole('button', { name: 'CSAI' }))
@@ -94,7 +95,7 @@ test('selecting a branch filters by that specialization, any degree', async () =
 })
 
 test('offers every branch and no department or degree filters', async () => {
-  render(<LeaderboardPage />)
+  render(<MemoryRouter><LeaderboardPage /></MemoryRouter>)
   await screen.findByText('Opponent')
   for (const b of ['CSE', 'CSAI', 'CSAM', 'CSB', 'CSSS', 'CSD', 'CSECON', 'ECE', 'EVE']) {
     expect(screen.getByRole('button', { name: b })).toBeInTheDocument()
@@ -106,7 +107,7 @@ test('offers every branch and no department or degree filters', async () => {
 test('shows empty state when there are no rows', async () => {
   mockedEndpoints.getLeaderboard.mockResolvedValue({ metric: 'level', myRank: 0, rows: [] })
 
-  render(<LeaderboardPage />)
+  render(<MemoryRouter><LeaderboardPage /></MemoryRouter>)
 
   expect(await screen.findByText('No players yet.')).toBeInTheDocument()
 })
@@ -114,13 +115,13 @@ test('shows empty state when there are no rows', async () => {
 test('shows error state when the fetch fails and no cache exists', async () => {
   mockedEndpoints.getLeaderboard.mockRejectedValue(new Error('down'))
 
-  render(<LeaderboardPage />)
+  render(<MemoryRouter><LeaderboardPage /></MemoryRouter>)
 
   expect(await screen.findByText('Failed to load leaderboard.')).toBeInTheDocument()
 })
 
 test('shows most-played decks and no building activity', async () => {
-  render(<LeaderboardPage />)
+  render(<MemoryRouter><LeaderboardPage /></MemoryRouter>)
 
   expect(await screen.findByText('Most-played decks')).toBeInTheDocument()
   expect(screen.getByText('RG Combat')).toBeInTheDocument()
