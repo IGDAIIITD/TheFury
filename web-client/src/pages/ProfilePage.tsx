@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
-import { getMyStats } from '../api/endpoints'
+import { getMyStats, getPublicProfile } from '../api/endpoints'
 import { useAuth } from '../auth/AuthContext'
 import { CACHE_KEYS, cacheGet, cacheSet } from '../lib/idb'
 import { swatchBg, swatchFg } from '../lib/colors'
 import type { ProfileStatsDto } from '../api/types'
+import { useParams } from 'react-router-dom'
+import { degreeLabel } from '../lib/labels'
 
 const COLOR_LABELS: Record<string, string> = {
   W: 'White',
@@ -20,6 +22,9 @@ export default function ProfilePage() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const params = useParams()
+  const queryId = new URLSearchParams(window.location.search).get('id')
+  const profileId = params.id || queryId || null
 
   const load = useCallback(async () => {
     const fresh = await getMyStats()
@@ -31,6 +36,40 @@ export default function ProfilePage() {
   useEffect(() => {
     let mounted = true
     const boot = async () => {
+      if (profileId) {
+        try {
+          const pub = await getPublicProfile(profileId)
+          if (!mounted) return
+          if (!pub) {
+            setError('Profile not found.')
+            setLoading(false)
+            return
+          }
+          // build minimal stats shape for public view
+          setStats({
+            player: pub,
+            experience: pub.experience,
+            level: pub.level,
+            experienceToNextLevel: Math.max(0, pub.level * 100 - pub.experience),
+            collectionCompletionPercent: 0,
+            ownedCards: 0,
+            totalCards: 0,
+            totalDiscoveries: 0,
+            favoriteColors: [],
+            buildingsVisited: [],
+            battleStats: { played: 0, wins: 0, losses: 0, winRatePercent: 0 },
+            badges: [],
+          })
+          setLoading(false)
+          return
+        } catch {
+          if (mounted) {
+            setError('Failed to load profile.')
+            setLoading(false)
+          }
+          return
+        }
+      }
       const cached = await cacheGet<ProfileStatsDto>(CACHE_KEYS.stats)
       if (mounted && cached) setStats(cached)
       try {
@@ -49,9 +88,10 @@ export default function ProfilePage() {
     return () => {
       mounted = false
     }
-  }, [refreshPlayer])
+  }, [refreshPlayer, profileId])
 
   const onRefresh = async () => {
+    if (profileId) return
     setRefreshing(true)
     try {
       await load()
@@ -83,17 +123,9 @@ export default function ProfilePage() {
         <div className="profile-avatar">{initials}</div>
         <div>
           <h2 style={{ margin: 0 }}>{displayName}</h2>
-          <p className="meta" style={{ margin: '4px 0 0' }}>
-            {stats.player.email}
-          </p>
-          {stats.player.studentId && (
-            <p className="meta" style={{ margin: 0 }}>
-              Student ID: {stats.player.studentId}
-            </p>
-          )}
           {stats.player.degreeLevel && (
-            <p className="meta" style={{ margin: 0 }}>
-              {stats.player.degreeLevel === 'MTECH' ? 'M.Tech' : 'B.Tech'}
+            <p className="meta" style={{ margin: '4px 0 0' }}>
+              {degreeLabel(stats.player.degreeLevel)}
               {stats.player.specialization ? ` · ${stats.player.specialization}` : ''}
             </p>
           )}
@@ -107,7 +139,7 @@ export default function ProfilePage() {
             <span>{stats.experience} XP</span>
           </div>
         </div>
-        <button className="btn ghost" onClick={onRefresh} disabled={refreshing}>
+        <button className="btn ghost" onClick={onRefresh} disabled={refreshing || !!profileId}>
           {refreshing ? 'Refreshing…' : 'Refresh'}
         </button>
       </div>

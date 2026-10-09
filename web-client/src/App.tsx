@@ -39,8 +39,9 @@ export default function App() {
         <Route path="/decks" element={<DeckBuilderPage />} />
         <Route path="/battle" element={battleEngineConfigured() ? <BattlePage /> : <BattleUnavailable />} />
         <Route path="/scan" element={<ScanPage />} />
-        <Route path="/profile" element={<ProfilePage />} />
-        <Route path="/leaderboard" element={<LeaderboardPage />} />
+      <Route path="/profile" element={<ProfilePage />} />
+      <Route path="/profile/:id" element={<ProfilePage />} />
+      <Route path="/leaderboard" element={<LeaderboardPage />} />
         <Route path="/how-to-play" element={<HowToPlayPage />} />
         <Route path="/" element={<Navigate to="/collection" replace />} />
       </Route>

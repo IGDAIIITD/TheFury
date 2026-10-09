@@ -1,15 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import { getLeaderboard, getPopularDecks } from '../api/endpoints'
 import { Chip, FilterBar, FilterGroup } from '../components/Filters'
+import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { CACHE_KEYS, cacheGet, cacheSet } from '../lib/idb'
 import {
-  type DegreeLevel,
   type LeaderboardFilters,
   type LeaderboardMetric,
   type LeaderboardResponse,
   type PopularDeckDto,
 } from '../api/types'
+import { degreeLabel } from '../lib/labels'
 
 const METRICS: { key: LeaderboardMetric; label: string }[] = [
   { key: 'level', label: 'Level' },
@@ -25,13 +26,8 @@ const METRIC_SUBTITLES: Record<LeaderboardMetric, string> = {
 
 const MEDAL_COLORS = ['#ffd700', '#c0c0c0', '#cd7f32']
 
-const DEGREE_LABELS: Record<DegreeLevel, string> = {
-  BTECH: 'B.Tech',
-  MTECH: 'M.Tech',
-}
-
 /** Individual branches (any degree). */
-const BRANCHES = ['CSE', 'CSAI', 'CSAM', 'CSB', 'CSSS', 'CSD', 'CSECON', 'ECE', 'EVE'] as const
+const BRANCHES = ['CSE', 'CSAI', 'CSAM', 'CSB', 'CSSS', 'CSD', 'CSECON', 'ECE', 'EVE', 'CB', 'SSH', 'MATHEMATICS', 'HCD'] as const
 
 export default function LeaderboardPage() {
   const { player } = useAuth()
@@ -155,19 +151,21 @@ export default function LeaderboardPage() {
                 {row.rank}
               </span>
               <span className="lb-name">
-                {row.avatar ? (
-                  <img src={row.avatar} alt="" className="lb-avatar" />
-                ) : (
-                  <span className="lb-avatar placeholder">{row.displayName.charAt(0)}</span>
-                )}
-                {row.displayName}
-                {row.degreeLevel && (
-                  <span className="lb-cohort">
-                    {DEGREE_LABELS[row.degreeLevel as DegreeLevel] ?? row.degreeLevel}
-                    {row.specialization ? ` · ${row.specialization}` : ''}
-                  </span>
-                )}
-                {isMe && <span className="lb-you">you</span>}
+                <Link to={`/profile?id=${row.playerId}`} className="lb-name">
+                  {row.avatar ? (
+                    <img src={row.avatar} alt="" className="lb-avatar" />
+                  ) : (
+                    <span className="lb-avatar placeholder">{row.displayName.charAt(0)}</span>
+                  )}
+                  {row.displayName}
+                  {row.degreeLevel && (
+                    <span className="lb-cohort">
+                      {degreeLabel(row.degreeLevel)}
+                      {row.specialization ? ` · ${row.specialization}` : ''}
+                    </span>
+                  )}
+                  {isMe && <span className="lb-you">you</span>}
+                </Link>
               </span>
               <span>{row.value}</span>
               <span className="lb-score">{row.score}{metric !== 'level' ? '%' : ''}</span>

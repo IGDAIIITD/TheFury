@@ -352,6 +352,13 @@ export async function validateDeck(
 // Profile / leaderboard / analytics
 // ---------------------------------------------------------------
 
+export async function getPublicProfile(playerId: string): Promise<ProfileStatsDto['player'] | null> {
+  const { data, error } = await supabase.rpc('public_profile', { p_player: playerId })
+  if (error) fail(error, 'Could not load profile')
+  if (!data) return null
+  return data as ProfileStatsDto['player']
+}
+
 export async function getMyStats(): Promise<ProfileStatsDto> {
   const { data, error } = await supabase.rpc('my_profile_stats')
   if (error) fail(error, 'Could not load stats')
@@ -400,6 +407,8 @@ export interface OpenLobbyDto {
 
 export interface RecentBattleDto {
   matchId: string
+  winnerId: string | null
+  loserId: string | null
   winnerName: string
   loserName: string
   winCondition: string | null
@@ -437,6 +446,8 @@ export async function getRecentBattles(limit = 30): Promise<RecentBattleDto[]> {
   if (error) fail(error, 'Could not load battle history')
   return ((data ?? []) as Record<string, unknown>[]).map((r) => ({
     matchId: r.match_id as string,
+    winnerId: (r.winner_id as string | null) ?? null,
+    loserId: (r.loser_id as string | null) ?? null,
     winnerName: r.winner_name as string,
     loserName: r.loser_name as string,
     winCondition: (r.win_condition as string | null) ?? null,

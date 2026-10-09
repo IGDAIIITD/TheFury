@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { getOpenLobbies, getRecentBattles, type OpenLobbyDto, type RecentBattleDto } from '../api/endpoints'
 import { battleEngineConfigured } from '../api/battleConfig'
 import { formatCountdown, remainingMs, timeAgo } from '../lib/time'
@@ -100,7 +100,11 @@ export default function EventsPage() {
           {(battles ?? []).map((b) => (
             <div key={b.matchId} className="battle-history-row">
               <span className="grow">
-                <strong>{b.winnerName}</strong> <span className="meta">beat</span> {b.loserName}
+                <strong>
+                  {b.winnerId ? <Link to={`/profile?id=${b.winnerId}`}>{b.winnerName}</Link> : b.winnerName}
+                </strong>{' '}
+                <span className="meta">beat</span>{' '}
+                {b.loserId ? <Link to={`/profile?id=${b.loserId}`}>{b.loserName}</Link> : b.loserName}
               </span>
               <span className="meta">{timeAgo(b.endedAt)}</span>
             </div>

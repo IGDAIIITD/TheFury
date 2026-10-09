@@ -11,7 +11,6 @@ import type { CardDto, CollectionEntryDto } from '../api/types'
 type OwnedFilter = 'all' | 'owned' | 'missing' | 'recent' | 'favorites'
 
 const COLORS = ['W', 'U', 'B', 'R', 'G', 'C']
-const MANA_CURVES = ['0', '1', '2', '3', '4+']
 const RARITY_COLORS: Record<string, string> = {
   common: '#6f6459',
   uncommon: '#6b8193',
@@ -29,7 +28,6 @@ export default function CollectionPage() {
   const [search, setSearch] = useState('')
   const [ownedFilter, setOwnedFilter] = useState<OwnedFilter>('owned')
   const [colors, setColors] = useState<Set<string>>(new Set())
-  const [curves, setCurves] = useState<Set<string>>(new Set())
   const [commanderEligibleOnly, setCommanderEligibleOnly] = useState(false)
   const [sets, setSets] = useState<Set<string>>(new Set())
   const [rarities, setRarities] = useState<Set<string>>(new Set())
@@ -81,15 +79,6 @@ export default function CollectionPage() {
       const next = new Set(prev)
       if (next.has(color)) next.delete(color)
       else next.add(color)
-      return next
-    })
-  }, [])
-
-  const toggleCurve = useCallback((curve: string) => {
-    setCurves((prev) => {
-      const next = new Set(prev)
-      if (next.has(curve)) next.delete(curve)
-      else next.add(curve)
       return next
     })
   }, [])
@@ -157,21 +146,12 @@ export default function CollectionPage() {
         if (!match) return false
       }
 
-      const mv = card.manaValue ?? 0
-      if (curves.size > 0) {
-        const match = [...curves].some((cv) => {
-          if (cv === '4+') return mv >= 4
-          return mv === parseInt(cv, 10)
-        })
-        if (!match) return false
-      }
-
       if (sets.size > 0 && (!card.setCode || !sets.has(card.setCode))) return false
       if (rarities.size > 0 && (!card.rarity || !rarities.has(card.rarity))) return false
 
       return true
     })
-  }, [cards, ownedMap, search, ownedFilter, colors, curves, commanderEligibleOnly, sets, rarities])
+  }, [cards, ownedMap, search, ownedFilter, colors, commanderEligibleOnly, sets, rarities])
 
   const totalOwned = useMemo(() => collection.length, [collection])
   const visible = showAll ? filtered : filtered.slice(0, INITIAL_VISIBLE)
@@ -188,7 +168,7 @@ export default function CollectionPage() {
             Events
           </Link>
           <Link to="/collection/trades" className="btn ghost">
-            ↔ Trades
+            Trades
           </Link>
         </div>
       </div>
@@ -230,13 +210,6 @@ export default function CollectionPage() {
             <Chip key={c} active={colors.has(c)} onClick={() => toggleColor(c)} color={swatchBg(c)} title={colorIdentityOf(c === 'C' ? null : c)}>
               <span className="chip-dot" style={{ background: swatchBg(c) }} aria-hidden />
               {c === 'C' ? 'Colorless' : colorIdentityOf(c)}
-            </Chip>
-          ))}
-        </FilterGroup>
-        <FilterGroup label="Mana value" tone="mana">
-          {MANA_CURVES.map((cv) => (
-            <Chip key={cv} active={curves.has(cv)} onClick={() => toggleCurve(cv)}>
-              {cv}
             </Chip>
           ))}
         </FilterGroup>

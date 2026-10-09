@@ -213,7 +213,7 @@ test('composer searches partner, selects bundles and creates trade', async () =>
   })
   fireEvent.click(screen.getByRole('button', { name: 'Search' }))
 
-  const partnerChip = await screen.findByText(/Opponent · MTECH CSE/)
+  const partnerChip = await screen.findByText(/Opponent · M\.Tech CSE/)
   fireEvent.click(partnerChip)
 
   await screen.findByText('You offer (0)')

@@ -1697,8 +1697,10 @@ textarea {
 /* The logo is black text on white: invert it (hue-rotate keeps the red/orange) and screen out the black. */
 :root[data-theme='dark'] .brand img,
 :root[data-theme='dark'] .auth-logo {
-  filter: invert(1) hue-rotate(180deg);
-  mix-blend-mode: screen;
+  /* The logo PNG is drawn on white; in dark mode leave it untouched rather than
+     inverting the IGDA mark (the blend already composites it onto the header). */
+  filter: none;
+  mix-blend-mode: normal;
 }
 
 :root[data-theme='dark'] .health-seg:not(.on) {

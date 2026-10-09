@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { CardArt } from '../lib/scryfall'
+import { degreeLabel } from '../lib/labels'
 import {
   acceptTrade,
   cancelTrade,
@@ -328,7 +329,7 @@ export default function TradePage() {
             .filter((p) => p.id !== myId)
             .map((p) => (
               <span key={p.id} className="chip active" onClick={() => void pickPartner(p)} style={{ cursor: 'pointer' }}>
-                {p.displayName} · {p.degreeLevel ?? ''} {p.specialization ?? ''}
+                {p.displayName} · {degreeLabel(p.degreeLevel) ?? ''} {p.specialization ?? ''}
               </span>
             ))}
           {searchResults.every((p) => p.id === myId) && (
@@ -342,7 +343,7 @@ export default function TradePage() {
           <p>
             Trading with <strong>{partner.displayName}</strong>{' '}
             <span className="meta">
-              ({partner.degreeLevel ?? ''} {partner.specialization ?? ''})
+              ({degreeLabel(partner.degreeLevel) ?? ''} {partner.specialization ?? ''})
             </span>{' '}
             <button className="btn ghost" onClick={() => setPartner(null)}>
               Change partner

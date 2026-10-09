@@ -12,6 +12,7 @@ import {
 } from '../api/endpoints'
 import { colorIdentityOf, colorSwatches, swatchBg, swatchFg } from '../lib/colors'
 import { CardArt } from '../lib/scryfall'
+import { Chip, FilterBar, FilterGroup } from '../components/Filters'
 import type { CardDto, CollectionEntryDto, DeckCardDto, DeckDto, DeckProblemDto } from '../api/types'
 
 interface LineItem {
@@ -27,10 +28,14 @@ interface EditedDeck {
   lines: LineItem[]
 }
 
-type CatalogFilter = 'all' | 'favorites'
-
 const COLORS = ['W', 'U', 'B', 'R', 'G', 'C']
-const MANA_CURVES = ['0', '1', '2', '3', '4+']
+const RARITY_COLORS: Record<string, string> = {
+  common: '#6f6459',
+  uncommon: '#6b8193',
+  rare: '#b8892a',
+  mythic: '#d2601a',
+}
+const RARITY_ORDER = ['Common', 'Uncommon', 'Rare', 'Mythic']
 
 const emptyDeck = (): EditedDeck => ({
   id: null,
@@ -55,10 +60,9 @@ export default function DeckBuilderPage() {
   const [decks, setDecks] = useState<DeckDto[]>([])
   const [deck, setDeck] = useState<EditedDeck>(emptyDeck())
   const [search, setSearch] = useState('')
-  const [catalogFilter, setCatalogFilter] = useState<CatalogFilter>('all')
   const [colors, setColors] = useState<Set<string>>(new Set())
-  const [curves, setCurves] = useState<Set<string>>(new Set())
-  const [commanderEligibleOnly, setCommanderEligibleOnly] = useState(false)
+  const [sets, setSets] = useState<Set<string>>(new Set())
+  const [rarities, setRarities] = useState<Set<string>>(new Set())
   const [result, setResult] = useState<{ valid: boolean; problems: DeckProblemDto[] } | null>(null)
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
@@ -101,14 +105,34 @@ export default function DeckBuilderPage() {
     })
   }
 
-  const toggleCurve = (cv: string) => {
-    setCurves((prev) => {
+  const toggleSet = (setCode: string) => {
+    setSets((prev) => {
       const next = new Set(prev)
-      if (next.has(cv)) next.delete(cv)
-      else next.add(cv)
+      if (next.has(setCode)) next.delete(setCode)
+      else next.add(setCode)
       return next
     })
   }
+
+  const toggleRarity = (rarity: string) => {
+    setRarities((prev) => {
+      const next = new Set(prev)
+      if (next.has(rarity)) next.delete(rarity)
+      else next.add(rarity)
+      return next
+    })
+  }
+
+  const availableSets = useMemo(() => {
+    return [...new Set(cards.map((c) => c.setCode).filter((s): s is string => !!s))].sort()
+  }, [cards])
+
+  const availableRarities = useMemo(() => {
+    const found = new Set(cards.map((c) => c.rarity).filter((r): r is string => !!r))
+    return RARITY_ORDER.filter((r) => found.has(r)).concat(
+      [...found].filter((r) => !RARITY_ORDER.includes(r)).sort(),
+    )
+  }, [cards])
 
   const onToggleFav = async (e: React.MouseEvent, cardId: string) => {
     e.stopPropagation()
@@ -133,10 +157,6 @@ export default function DeckBuilderPage() {
       if (owned !== 2147483647 && inDeck >= owned) return false
 
       if (q && !card.forgeName.toLowerCase().includes(q)) return false
-      const isFav = entry?.favorite ?? false
-
-      if (catalogFilter === 'favorites' && !isFav) return false
-      if (commanderEligibleOnly && !card.commanderEligible) return false
 
       const cardColors = card.colors ? card.colors.split('').filter((c) => c !== '') : []
       if (colors.size > 0) {
@@ -144,18 +164,12 @@ export default function DeckBuilderPage() {
         if (!match) return false
       }
 
-      const mv = card.manaValue ?? 0
-      if (curves.size > 0) {
-        const match = [...curves].some((cv) => {
-          if (cv === '4+') return mv >= 4
-          return mv === parseInt(cv, 10)
-        })
-        if (!match) return false
-      }
+      if (sets.size > 0 && (!card.setCode || !sets.has(card.setCode))) return false
+      if (rarities.size > 0 && (!card.rarity || !rarities.has(card.rarity))) return false
 
       return true
     })
-  }, [cards, ownedMap, lineMap, search, catalogFilter, colors, curves, commanderEligibleOnly])
+  }, [cards, ownedMap, lineMap, search, colors, sets, rarities])
 
   const loadDeck = async (id: string) => {
     try {
@@ -300,38 +314,6 @@ export default function DeckBuilderPage() {
           onChange={(e) => setSearch(e.target.value)}
           style={{ minWidth: 160 }}
         />
-        <span
-          className={`chip ${catalogFilter === 'favorites' ? 'active' : ''}`}
-          onClick={() => setCatalogFilter((f) => (f === 'favorites' ? 'all' : 'favorites'))}
-        >
-          ⭐ Favorites
-        </span>
-        <span
-          className={`chip ${commanderEligibleOnly ? 'active' : ''}`}
-          onClick={() => setCommanderEligibleOnly((v) => !v)}
-        >
-          Commander Eligible
-        </span>
-        <span style={{ width: 4 }} />
-        {COLORS.map((c) => (
-          <span
-            key={c}
-            className={`chip ${colors.has(c) ? 'active' : ''}`}
-            onClick={() => toggleColor(c)}
-          >
-            {c === 'C' ? 'C' : c}
-          </span>
-        ))}
-        <span style={{ width: 4 }} />
-        {MANA_CURVES.map((cv) => (
-          <span
-            key={cv}
-            className={`chip ${curves.has(cv) ? 'active' : ''}`}
-            onClick={() => toggleCurve(cv)}
-          >
-            {cv}
-          </span>
-        ))}
         <span style={{ flex: 1 }} />
         <button className="btn" onClick={save} disabled={busy}>
           Save
@@ -344,6 +326,35 @@ export default function DeckBuilderPage() {
         </button>
         <span style={{ color: 'var(--muted)', fontSize: 14 }}>Total: {totalCards}</span>
       </div>
+
+      <FilterBar>
+        <FilterGroup label="Color" tone="color">
+          {COLORS.map((c) => (
+            <Chip key={c} active={colors.has(c)} onClick={() => toggleColor(c)} color={swatchBg(c)} title={colorIdentityOf(c === 'C' ? null : c)}>
+              <span className="chip-dot" style={{ background: swatchBg(c) }} aria-hidden />
+              {c === 'C' ? 'Colorless' : colorIdentityOf(c)}
+            </Chip>
+          ))}
+        </FilterGroup>
+        {availableSets.length > 0 && (
+          <FilterGroup label="Set" tone="set">
+            {availableSets.map((set) => (
+              <Chip key={set} active={sets.has(set)} onClick={() => toggleSet(set)}>
+                {set}
+              </Chip>
+            ))}
+          </FilterGroup>
+        )}
+        {availableRarities.length > 0 && (
+          <FilterGroup label="Rarity" tone="rarity">
+            {availableRarities.map((r) => (
+              <Chip key={r} active={rarities.has(r)} onClick={() => toggleRarity(r)} color={RARITY_COLORS[r.toLowerCase()]}>
+                {r}
+              </Chip>
+            ))}
+          </FilterGroup>
+        )}
+      </FilterBar>
 
       {deck.formatCode === 'COMMANDER' && (
         <div className="panel" style={{ marginBottom: 16 }}>

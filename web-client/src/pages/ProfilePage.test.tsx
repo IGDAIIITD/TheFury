@@ -65,7 +65,6 @@ test('renders player stats, xp bar and badges', async () => {
   render(<ProfilePage />)
 
   expect(await screen.findByText('BattleTest')).toBeInTheDocument()
-  expect(screen.getByText('Student ID: S001')).toBeInTheDocument()
   expect(screen.getByText('B.Tech · CSAI')).toBeInTheDocument()
   expect(screen.getByText('Lv 13')).toBeInTheDocument()
   expect(screen.getByText('90 XP to level 14')).toBeInTheDocument()

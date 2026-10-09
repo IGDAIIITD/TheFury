@@ -4,6 +4,7 @@ import { useAuth } from '../auth/AuthContext'
 import { checkRoll, ROLL_RE, type RollStatus } from '../api/rollAuth'
 import logo from '../assets/igda-iiitd-logo.png'
 import ThemeToggle from '../components/ThemeToggle'
+import { degreeLabel } from '../lib/labels'
 
 /**
  * Sign-in for The Fury.
@@ -17,8 +18,6 @@ import ThemeToggle from '../components/ThemeToggle'
 type Step = 'identify' | 'password'
 
 const MIN_PASSWORD = 8
-
-const DEGREE_LABEL: Record<string, string> = { BTECH: 'B.Tech', MTECH: 'M.Tech', PHD: 'PhD' }
 
 function errorText(err: unknown, fallback: string): string {
   const e = err as { status?: number; message?: string } | null
@@ -139,7 +138,7 @@ export default function LoginPage() {
             <div className="auth-who">
               <strong>{student.name}</strong>
               <span className="meta">
-                {student.rollNo} · {DEGREE_LABEL[student.degreeLevel] ?? student.degreeLevel} {student.program} ·{' '}
+                {student.rollNo} · {degreeLabel(student.degreeLevel) ?? student.degreeLevel} {student.program} ·{' '}
                 {student.batch} batch
               </span>
             </div>
