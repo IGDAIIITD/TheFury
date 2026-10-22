@@ -17,6 +17,8 @@ import {
   MANA_EMOJI,
   renderManaCost,
   describeManaCost,
+  shouldSendAutoPass,
+  hasCompleteLiveBoard,
 } from './battleUi'
 
 const card = (id: number, name: string, extra: Record<string, unknown> = {}) => ({ id, name, ...extra })
@@ -301,6 +303,21 @@ describe('isImmediateChoice / primaryActionLabel', () => {
     expect(primaryActionLabel(choice({ type: 'discard' }))).toBe('Confirm')
     expect(primaryActionLabel(choice({ type: 'play' }))).toBeNull()
     expect(primaryActionLabel(choice({ type: 'mulligan' }))).toBeNull()
+  })
+})
+
+describe('automatic pass and live board recovery', () => {
+  it('does not consume an automatic pass until the socket is connected', () => {
+    const pending = choice({ requestId: 8, type: 'play' })
+    expect(shouldSendAutoPass(pending, [], false, null)).toBe(false)
+    expect(shouldSendAutoPass(pending, [], true, null)).toBe(true)
+    expect(shouldSendAutoPass(pending, [], true, 8)).toBe(false)
+  })
+
+  it('recognizes complete board snapshots and rejects incomplete ones', () => {
+    expect(hasCompleteLiveBoard(baseState())).toBe(true)
+    expect(hasCompleteLiveBoard(baseState({ players: [me as never] }))).toBe(false)
+    expect(hasCompleteLiveBoard(null)).toBe(false)
   })
 })
 

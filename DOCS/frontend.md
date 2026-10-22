@@ -67,8 +67,10 @@ vertical dividers (stacked on phones); each group has its own accent, color chip
   once and then at most one per 150 ms (game over immediately); decisions it passes by itself (`isAutoPass`: only
   mana taps available) are shown as "waiting", and the action dock at the bottom stays mounted with a stable height.
 - **Reconnect:** the tab remembers its match (`localStorage.cf_active_match`) and rejoins after a reload; after
-  every (re)subscribe it re-fetches the state so a pending decision reappears. The lobby also offers **Rejoin**
-  for a battle in progress.
+  every (re)subscribe it re-fetches the state so a pending decision reappears. Automatic passes are only marked
+  sent once the WebSocket is connected, and are retried from the engine's current pending choice after reconnect.
+  Incomplete or unavailable live snapshots show a retry action instead of an empty board. The lobby also offers
+  **Rejoin** for a battle in progress.
 - Each player strip has a **life bar of 20 segments**, one per life point (`healthSegments`; life above 20
   shows as "+N"), and a **mana panel** with one orb per color: untapped mana sources + floating mana
   (`availableMana`; sources are basic lands by name, anything else from its "{T}: Add …" text).

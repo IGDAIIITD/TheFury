@@ -498,6 +498,29 @@ export function isAutoPass(choice: PendingChoice | null | undefined, matches: Op
   return !!choice && choice.type === 'play' && !matches.some((m) => m.zone !== 'none' && !m.manaAbility)
 }
 
+export function shouldSendAutoPass(
+  choice: PendingChoice | null | undefined,
+  matches: OptionMatch[],
+  connected: boolean,
+  lastSentRequestId: number | null,
+): choice is PendingChoice {
+  return !!choice &&
+    connected &&
+    isAutoPass(choice, matches) &&
+    choice.requestId !== lastSentRequestId
+}
+
+export function hasCompleteLiveBoard(state: MatchState | null | undefined): boolean {
+  if (!state || !Array.isArray(state.players) || !Array.isArray(state.stack)) return false
+  return [0, 1].every((index) => {
+    const player = state.players.find((candidate) => candidate?.index === index)
+    return !!player &&
+      Array.isArray(player.hand) &&
+      Array.isArray(player.battlefield) &&
+      Array.isArray(player.graveyard)
+  })
+}
+
 /** Zones the choice actually uses, for highlighting the right card groups. */
 export function interactiveZones(choice: PendingChoice): MatchZone[] {
   switch (choice.type) {

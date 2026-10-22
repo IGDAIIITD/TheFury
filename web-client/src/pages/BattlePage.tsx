@@ -31,6 +31,8 @@ import {
   primaryActionLabel,
   isInCombatPhase,
   isAutoPass,
+  shouldSendAutoPass,
+  hasCompleteLiveBoard,
 } from './battleUi'
 import type { BattleInstruction, MatchZone, OptionMatch } from './battleUi'
 
@@ -246,6 +248,7 @@ export default function BattlePage() {
   const pendingStateRef = useRef<MatchState | null>(null)
   const throttleTimer = useRef<number | null>(null)
   const autoPassedRef = useRef<number | null>(null)
+  const stateSyncSeq = useRef(0)
   const [decks, setDecks] = useState<DeckDto[]>([])
   const [selectedDeckId, setSelectedDeckId] = useState('')
   const [joinCode, setJoinCode] = useState('')
@@ -254,6 +257,8 @@ export default function BattlePage() {
   const [gameState, setGameState] = useState<MatchState | null>(MOCK ? mockState() : null)
   const [info, setInfo] = useState('')
   const [notice, setNotice] = useState('')
+  const [stateLoading, setStateLoading] = useState(false)
+  const [stateLoadError, setStateLoadError] = useState('')
   const [aiEnabled, setAiEnabled] = useState(false)
   const clientRef = useRef<Client | null>(null)
 
@@ -350,6 +355,24 @@ export default function BattlePage() {
     }
   }, [])
 
+  const syncMatchState = useCallback(async (matchId: string) => {
+    const requestSeq = ++stateSyncSeq.current
+    setStateLoading(true)
+    setStateLoadError('')
+    try {
+      const state = await getMatchState(matchId)
+      if (requestSeq !== stateSyncSeq.current) return
+      autoPassedRef.current = null
+      applyState(state)
+    } catch (err) {
+      if (requestSeq === stateSyncSeq.current) {
+        setStateLoadError(engineMessage(err) ?? 'Could not reconnect to the battle server. Try again.')
+      }
+    } finally {
+      if (requestSeq === stateSyncSeq.current) setStateLoading(false)
+    }
+  }, [applyState])
+
   useEffect(
     () => () => {
       if (throttleTimer.current !== null) window.clearTimeout(throttleTimer.current)
@@ -369,9 +392,7 @@ export default function BattlePage() {
     let cancelled = false
     let stompClient: Client | null = null
 
-    getMatchState(activeMatch.id)
-      .then(applyState)
-      .catch(() => {})
+    void syncMatchState(activeMatch.id)
 
     battleToken().then((wsToken) => {
       if (cancelled) return
@@ -383,6 +404,7 @@ export default function BattlePage() {
         connectHeaders: { Authorization: `Bearer ${wsToken}` },
         reconnectDelay: 5000,
         onConnect: () => {
+          autoPassedRef.current = null
           client.subscribe(`/topic/match/${activeMatch.id}/p${myIndex}`, (msg) => {
             const parsed = JSON.parse(msg.body)
             if (parsed.type === 'info') {
@@ -390,6 +412,7 @@ export default function BattlePage() {
               return
             }
             applyState(parsed)
+            setStateLoadError('')
             if (parsed.gameOver) {
               forgetActiveMatch()
               refreshHistory()
@@ -397,9 +420,7 @@ export default function BattlePage() {
           })
           // Subscribing is what the engine treats as "back": re-sync the board and any
           // decision that was requested while this tab was away.
-          getMatchState(activeMatch.id)
-            .then(applyState)
-            .catch(() => {})
+          void syncMatchState(activeMatch.id)
         },
       })
       stompClient = client
@@ -409,10 +430,11 @@ export default function BattlePage() {
 
     return () => {
       cancelled = true
+      stateSyncSeq.current++
       stompClient?.deactivate()
       clientRef.current = null
     }
-  }, [activeMatch, player, myIndex, applyState, refreshHistory])
+  }, [activeMatch, player, myIndex, applyState, refreshHistory, syncMatchState])
 
   // Reconnect-on-resume: a backgrounded/suspended tab can silently kill the
   // socket and pause JS timers, so on return we immediately re-establish the
@@ -424,13 +446,12 @@ export default function BattlePage() {
     const resume = () => {
       if (resumingRef.current) return
       resumingRef.current = true
+      autoPassedRef.current = null
       const client = clientRef.current
       if (client && !client.connected && !client.active) {
         client.activate()
       }
-      getMatchState(activeMatch.id)
-        .then(applyState)
-        .catch(() => {})
+      void syncMatchState(activeMatch.id)
       window.setTimeout(() => {
         resumingRef.current = false
       }, 1000)
@@ -451,7 +472,7 @@ export default function BattlePage() {
       window.removeEventListener('pageshow', resume)
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [activeMatch, applyState])
+  }, [activeMatch, syncMatchState])
 
   // While waiting for an opponent to join a lobby, poll for the game starting.
   useEffect(() => {
@@ -556,22 +577,42 @@ export default function BattlePage() {
       battlefield: me?.battlefield ?? [],
       opponent: opponent?.battlefield ?? [],
     }, gameState.phase)
-    if (isAutoPass(choice, mats) && autoPassedRef.current !== choice.requestId) {
-      autoPassedRef.current = choice.requestId
-      sendChoice(choice.requestId, [])
+    const client = clientRef.current
+    if (shouldSendAutoPass(choice, mats, !!client?.connected, autoPassedRef.current)) {
+      if (sendChoice(choice.requestId, [])) {
+        autoPassedRef.current = choice.requestId
+      }
     }
   }, [gameState?.pendingChoice, gameState?.players, gameState?.phase, myIndex])
 
-  const sendChoice = (requestId: number, indices: number[]) => {
+  const sendChoice = (requestId: number, indices: number[], reportFailure = true): boolean => {
     const client = clientRef.current
-    if (!client || !activeMatch) return
-    client.publish({
-      destination: `/app/match/${activeMatch.id}/action`,
-      body: JSON.stringify({
-        actionType: 'CHOICE',
-        payload: { requestId, selectedIndices: indices },
-      }),
-    })
+    if (!client?.connected || !activeMatch) {
+      if (reportFailure) setNotice('Reconnecting to the battle server. Your move was not sent; try again when connected.')
+      return false
+    }
+    try {
+      client.publish({
+        destination: `/app/match/${activeMatch.id}/action`,
+        body: JSON.stringify({
+          actionType: 'CHOICE',
+          payload: { requestId, selectedIndices: indices },
+        }),
+      })
+      return true
+    } catch (err) {
+      if (reportFailure) {
+        setNotice(err instanceof Error ? `Could not send your move: ${err.message}` : 'Could not send your move.')
+      }
+      return false
+    }
+  }
+
+  const retryBattleState = () => {
+    if (!activeMatch) return
+    const client = clientRef.current
+    if (client && !client.connected && !client.active) client.activate()
+    void syncMatchState(activeMatch.id)
   }
 
   // One lobby request at a time: starting/joining a game takes a moment on the
@@ -700,7 +741,7 @@ export default function BattlePage() {
     }
 
     // Waiting for an opponent to join the lobby.
-    if (gameState?.status === 'PENDING' || (gameState === null && !over)) {
+    if (activeMatch.status === 'PENDING' && (gameState?.status === 'PENDING' || gameState === null)) {
       return (
         <div className="page">
           <h2>Battle Lobby</h2>
@@ -738,8 +779,30 @@ export default function BattlePage() {
     }
 
     // Terminal state with no live board snapshot.
-    if (!Array.isArray(gameState?.players) || gameState!.players.length === 0) {
-      const lost = gameState?.status === 'ACTIVE' && !gameState.gameOver
+    if (!hasCompleteLiveBoard(gameState)) {
+      const playerCount = Array.isArray(gameState?.players) ? gameState.players.length : 0
+      const lost = gameState?.status === 'ACTIVE' && !gameState.gameOver && playerCount === 0
+      const terminal = gameState?.gameOver === true ||
+        gameState?.status === 'COMPLETED' ||
+        gameState?.status === 'CONCEDED'
+      if (!lost && !terminal) {
+        return (
+          <div className="page">
+            <h2>Reconnecting to battle</h2>
+            <div className="panel" style={{ textAlign: 'center', marginBottom: 20 }}>
+              <div style={{ color: 'var(--muted)' }}>
+                {stateLoadError || (stateLoading ? 'Restoring the live battle…' : 'The live board is not ready yet.')}
+              </div>
+            </div>
+            <div className="filters" style={{ justifyContent: 'center' }}>
+              <button className="btn" onClick={retryBattleState} disabled={stateLoading}>
+                {stateLoading ? 'Reconnecting…' : 'Retry connection'}
+              </button>
+              <button className="btn ghost" onClick={backToLobby}>Back to Lobby</button>
+            </div>
+          </div>
+        )
+      }
       return (
         <div className="page">
           <h2>Live Combat Board</h2>
@@ -972,7 +1035,11 @@ export default function BattlePage() {
             />
           ) : (
             <div className="battle-actionbar idle" aria-live="polite">
-              Waiting for {opponent?.name ?? 'your opponent'}…
+              {autoPass
+                ? clientRef.current?.connected
+                  ? 'Passing priority…'
+                  : 'Reconnecting to send your pass…'
+                : `Waiting for ${opponent?.name ?? 'your opponent'}…`}
             </div>
           ))}
 
