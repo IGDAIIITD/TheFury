@@ -319,6 +319,22 @@ describe('automatic pass and live board recovery', () => {
     expect(hasCompleteLiveBoard(baseState({ players: [me as never] }))).toBe(false)
     expect(hasCompleteLiveBoard(null)).toBe(false)
   })
+
+  it('accepts seat-private snapshots without exposing the opponent hand', () => {
+    const players = [
+      { ...me, hand: undefined },
+      { ...opponent, hand: undefined },
+    ] as never
+    const state = baseState({ players })
+
+    expect(hasCompleteLiveBoard(state, 0)).toBe(false)
+    expect(hasCompleteLiveBoard(baseState({
+      players: [{ ...me }, { ...opponent, hand: undefined }] as never,
+    }), 0)).toBe(true)
+    expect(hasCompleteLiveBoard(baseState({
+      players: [{ ...me, hand: undefined }, { ...opponent }] as never,
+    }), 1)).toBe(true)
+  })
 })
 
 describe('MANA_EMOJI', () => {

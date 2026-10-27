@@ -779,7 +779,7 @@ export default function BattlePage() {
     }
 
     // Terminal state with no live board snapshot.
-    if (!hasCompleteLiveBoard(gameState)) {
+    if (!hasCompleteLiveBoard(gameState, myIndex)) {
       const playerCount = Array.isArray(gameState?.players) ? gameState.players.length : 0
       const lost = gameState?.status === 'ACTIVE' && !gameState.gameOver && playerCount === 0
       const terminal = gameState?.gameOver === true ||

@@ -510,12 +510,15 @@ export function shouldSendAutoPass(
     choice.requestId !== lastSentRequestId
 }
 
-export function hasCompleteLiveBoard(state: MatchState | null | undefined): boolean {
+export function hasCompleteLiveBoard(
+  state: MatchState | null | undefined,
+  playerIndex = 0,
+): boolean {
   if (!state || !Array.isArray(state.players) || !Array.isArray(state.stack)) return false
   return [0, 1].every((index) => {
     const player = state.players.find((candidate) => candidate?.index === index)
     return !!player &&
-      Array.isArray(player.hand) &&
+      (index !== playerIndex || Array.isArray(player.hand)) &&
       Array.isArray(player.battlefield) &&
       Array.isArray(player.graveyard)
   })

@@ -94,6 +94,7 @@ public final class GameStateSerializer {
 
         p.put("handSize", player.getHand().size());
         p.put("librarySize", player.getLibrary().size());
+        p.put("hand", new ArrayList<>());
 
         List<Map<String, Object>> battlefield = new ArrayList<>();
         for (CardView card : player.getBattlefield()) {

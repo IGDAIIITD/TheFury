@@ -112,8 +112,9 @@ invalid token), **404** (unknown match or path), **409** (lobby no longer open),
   `{ matchId, player1Id, player2Id, turn, phase, activePlayerIndex,
   players: [{ index, name, life, hasPriority, hasLost, handSize, librarySize, hand, battlefield, graveyard, mana }],
   stack, pendingChoice: { requestId, type, prompt, cancellable, minCount, maxCount, options: [{ label, value, cardId? }] },
-  gameOver, status, winnerName, winnerId, winCondition }`. Your own `hand` has the cards; the opponent's only
-  has `handSize`. `cardId` (when the option is about a card) is the id used in `hand`/`battlefield`, so two
+  gameOver, status, winnerName, winnerId, winCondition }`. Each player's `hand` is an array; your own contains
+  the cards and the opponent's is empty
+  (their visible count is `handSize`). `cardId` (when the option is about a card) is the id used in `hand`/`battlefield`, so two
   identical cards are two distinct options.
 - Act: send to `/app/match/{matchId}/action`:
   `{ "actionType": "CHOICE", "payload": { "requestId": 12, "selectedIndices": [0] } }`.
