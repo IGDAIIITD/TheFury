@@ -71,6 +71,8 @@ export interface PendingChoice {
 /** Live game state pushed by the backend from the embedded Forge engine. */
 export interface MatchState {
   matchId: string
+  /** Monotonically increasing within one live engine session. */
+  stateVersion?: number
   player1Id: string
   player2Id: string | null
   turn: number

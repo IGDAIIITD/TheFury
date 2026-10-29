@@ -78,12 +78,24 @@ public class HumanPlayerController extends PlayerControllerAi {
      * request. Called from the backend (WebSocket) thread.
      */
     public boolean submitChoice(long requestId, List<Integer> selectedIndices) {
+        if (wasRequestAccepted(requestId)) {
+            return true;
+        }
         ChoiceRequest req = pendingRequest;
         if (req == null || req.getId() != requestId || !markResponseSubmitted(lastAnsweredRequestId, requestId)) {
             return false;
         }
         responses.offer(new Choice(requestId, selectedIndices == null ? new ArrayList<>() : selectedIndices));
         return true;
+    }
+
+    /** Duplicate delivery is acknowledged without enqueueing the same move twice. */
+    public boolean wasRequestAccepted(long requestId) {
+        return isLastAcceptedRequest(lastAnsweredRequestId, requestId);
+    }
+
+    static boolean isLastAcceptedRequest(AtomicLong lastAnsweredRequestId, long requestId) {
+        return lastAnsweredRequestId.get() == requestId;
     }
 
     static boolean markResponseSubmitted(AtomicLong lastAnsweredRequestId, long requestId) {

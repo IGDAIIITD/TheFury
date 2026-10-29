@@ -68,10 +68,14 @@ vertical dividers (stacked on phones); each group has its own accent, color chip
   mana taps available) are shown as "waiting", and the action dock at the bottom stays mounted with a stable height.
 - **Reconnect:** the tab remembers its match (`localStorage.cf_active_match`) and rejoins after a reload; after
   every (re)subscribe it re-fetches the state so a pending decision reappears. Automatic passes are only marked
-  sent once the WebSocket is connected, and are retried from the engine's current pending choice after reconnect.
+  sent once the WebSocket is connected. The STOMP client watches the server heartbeat, shows reconnect status,
+  and retries an unacknowledged choice with the same request ID only after REST confirms it is still pending.
+  Engine snapshots carry a monotonically increasing version to keep a delayed catch-up response from replacing a
+  newer WebSocket update.
   Board readiness requires the requesting player's hand (the opponent's hand is private and may be omitted by
   older engines). Incomplete or unavailable live snapshots show a retry action instead of an empty board. The
-  lobby also offers **Rejoin** for a battle in progress.
+  lobby also offers **Rejoin** for a battle in progress. This recovers transient connection failures while the
+  engine still holds the match; a Quick Tunnel outage or engine restart can still make a game unavailable.
 - Each player strip has a **life bar of 20 segments**, one per life point (`healthSegments`; life above 20
   shows as "+N"), and a **mana panel** with one orb per color: untapped mana sources + floating mana
   (`availableMana`; sources are basic lands by name, anything else from its "{T}: Add …" text).

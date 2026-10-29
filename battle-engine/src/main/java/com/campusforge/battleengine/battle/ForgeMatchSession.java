@@ -20,6 +20,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 /**
@@ -47,6 +48,7 @@ public class ForgeMatchSession implements Consumer<Map<String, Object>> {
     private final Set<UUID> disconnected = ConcurrentHashMap.newKeySet();
 
     private volatile Map<String, Object> latestState;
+    private final AtomicLong stateVersion = new AtomicLong();
 
     public ForgeMatchSession(UUID matchId,
                              forge.deck.Deck deck1, UUID player1Id, String player1Name,
@@ -118,6 +120,12 @@ public class ForgeMatchSession implements Consumer<Map<String, Object>> {
 
     public UUID getPlayerIdForIndex(int index) {
         return index == 0 ? player1Id : player2Id;
+    }
+
+    public int getPlayerIndex(UUID playerId) {
+        if (player1Id.equals(playerId)) return 0;
+        if (player2Id != null && player2Id.equals(playerId)) return 1;
+        return -1;
     }
 
     public Map<String, Object> getLatestState() {
@@ -220,6 +228,11 @@ public class ForgeMatchSession implements Consumer<Map<String, Object>> {
         return controller.submitChoice(requestId, selectedIndices);
     }
 
+    public boolean hasAcceptedChoice(UUID playerId, long requestId) {
+        HumanPlayerController controller = controllerFor(playerId);
+        return controller != null && controller.wasRequestAccepted(requestId);
+    }
+
     /** Marks a player disconnected (grace period bookkeeping). */
     public void markDisconnected(UUID playerId) {
         disconnected.add(playerId);
@@ -287,8 +300,7 @@ public class ForgeMatchSession implements Consumer<Map<String, Object>> {
             msg.put("matchId", matchId.toString());
             msg.put("player1Id", player1Id.toString());
             msg.put("player2Id", player2Id != null ? player2Id.toString() : null);
-            latestState = msg;
-            publish(msg);
+            publish(recordState(msg));
         } catch (Throwable t) {
             log.warn("Failed to publish decision state for match {}", matchId, t);
         }
@@ -314,8 +326,7 @@ public class ForgeMatchSession implements Consumer<Map<String, Object>> {
         } catch (Throwable ignored) {
             // state enrichment is best-effort
         }
-        latestState = msg;
-        publish(msg);
+        publish(recordState(msg));
     }
 
     private void publish(Map<String, Object> common) {
@@ -328,6 +339,13 @@ public class ForgeMatchSession implements Consumer<Map<String, Object>> {
         } catch (Throwable t) {
             log.warn("Failed to publish state for match {}", matchId, t);
         }
+    }
+
+    private synchronized Map<String, Object> recordState(Map<String, Object> state) {
+        Map<String, Object> versioned = new HashMap<>(state);
+        versioned.put("stateVersion", stateVersion.incrementAndGet());
+        latestState = versioned;
+        return versioned;
     }
 
     private void publishForPlayer(int index, Map<String, Object> common, GameView view) {

@@ -31,8 +31,11 @@ class HumanPlayerControllerChoiceTest {
         AtomicLong lastAnsweredRequestId = new AtomicLong();
 
         assertTrue(HumanPlayerController.markResponseSubmitted(lastAnsweredRequestId, 1));
+        assertTrue(HumanPlayerController.isLastAcceptedRequest(lastAnsweredRequestId, 1));
         assertFalse(HumanPlayerController.markResponseSubmitted(lastAnsweredRequestId, 1));
         assertTrue(HumanPlayerController.markResponseSubmitted(lastAnsweredRequestId, 2));
+        assertFalse(HumanPlayerController.isLastAcceptedRequest(lastAnsweredRequestId, 1));
+        assertTrue(HumanPlayerController.isLastAcceptedRequest(lastAnsweredRequestId, 2));
         assertFalse(HumanPlayerController.markResponseSubmitted(lastAnsweredRequestId, 1));
     }
 

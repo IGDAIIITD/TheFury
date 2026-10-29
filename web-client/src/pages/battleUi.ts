@@ -524,6 +524,35 @@ export function hasCompleteLiveBoard(
   })
 }
 
+export function isStaleMatchState(next: MatchState, current: MatchState | null): boolean {
+  return !!current &&
+    next.matchId === current.matchId &&
+    typeof next.stateVersion === 'number' &&
+    typeof current.stateVersion === 'number' &&
+    next.stateVersion < current.stateVersion
+}
+
+export interface SubmittedBattleChoice {
+  matchId: string
+  requestId: number
+  acknowledged: boolean
+  attempts: number
+}
+
+export type ChoiceRecoveryAction = 'resolved' | 'retry' | 'wait'
+
+export function choiceRecoveryAction(
+  submitted: SubmittedBattleChoice,
+  state: MatchState,
+  connected: boolean,
+  maxRetries = 3,
+): ChoiceRecoveryAction {
+  if (state.matchId !== submitted.matchId) return 'wait'
+  if (state.pendingChoice?.requestId !== submitted.requestId) return 'resolved'
+  if (!connected || submitted.acknowledged || submitted.attempts >= maxRetries) return 'wait'
+  return 'retry'
+}
+
 /** Zones the choice actually uses, for highlighting the right card groups. */
 export function interactiveZones(choice: PendingChoice): MatchZone[] {
   switch (choice.type) {

@@ -19,6 +19,8 @@ import {
   describeManaCost,
   shouldSendAutoPass,
   hasCompleteLiveBoard,
+  isStaleMatchState,
+  choiceRecoveryAction,
 } from './battleUi'
 
 const card = (id: number, name: string, extra: Record<string, unknown> = {}) => ({ id, name, ...extra })
@@ -334,6 +336,23 @@ describe('automatic pass and live board recovery', () => {
     expect(hasCompleteLiveBoard(baseState({
       players: [{ ...me, hand: undefined }, { ...opponent }] as never,
     }), 1)).toBe(true)
+  })
+
+  it('rejects an older snapshot for the same match without blocking newer matches', () => {
+    const current = baseState({ stateVersion: 12 })
+    expect(isStaleMatchState(baseState({ stateVersion: 11 }), current)).toBe(true)
+    expect(isStaleMatchState(baseState({ stateVersion: 12 }), current)).toBe(false)
+    expect(isStaleMatchState(baseState({ matchId: 'm2', stateVersion: 1 }), current)).toBe(false)
+    expect(isStaleMatchState(baseState(), current)).toBe(false)
+  })
+
+  it('retries only an unacknowledged choice that is still pending', () => {
+    const submitted = { matchId: 'm1', requestId: 7, acknowledged: false, attempts: 0 }
+    expect(choiceRecoveryAction(submitted, baseState({ pendingChoice: choice({ requestId: 7 }) }), true)).toBe('retry')
+    expect(choiceRecoveryAction(submitted, baseState({ pendingChoice: choice({ requestId: 7 }) }), false)).toBe('wait')
+    expect(choiceRecoveryAction({ ...submitted, acknowledged: true }, baseState({ pendingChoice: choice({ requestId: 7 }) }), true)).toBe('wait')
+    expect(choiceRecoveryAction({ ...submitted, attempts: 3 }, baseState({ pendingChoice: choice({ requestId: 7 }) }), true)).toBe('wait')
+    expect(choiceRecoveryAction(submitted, baseState({ pendingChoice: null }), true)).toBe('resolved')
   })
 })
 

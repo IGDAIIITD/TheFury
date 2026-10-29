@@ -104,12 +104,14 @@ invalid token), **404** (unknown match or path), **409** (lobby no longer open),
 
 - Connect: `wss://<engine>/ws/match`, sub-protocol `v12.stomp`, `CONNECT` header
   `Authorization: Bearer <access token>` (rejected with an `ERROR` frame otherwise).
+- The simple broker has a dedicated scheduler and exchanges STOMP heartbeats every 10 seconds with clients.
+  The web client treats missed server heartbeats as a lost connection and reconnects.
 - Subscribe: `/topic/match/{matchId}/p{seat}` (seat 0 = player 1, 1 = player 2). **Only the player in that seat may
   subscribe** (the topic carries their hand and decisions); others get an `ERROR` frame. Subscribing also counts
-  as reconnecting (see below). Messages are either
-  `{ "type": "info", "message": "..." }` or a full state (typed as `MatchState` in
+  as reconnecting (see below). Messages include `{ "type": "info", "message": "..." }`,
+  `{ "type": "action-ack", "requestId": 12, "accepted": true }`, or a full state (typed as `MatchState` in
   `web-client/src/api/battleTypes.ts`):
-  `{ matchId, player1Id, player2Id, turn, phase, activePlayerIndex,
+  `{ matchId, stateVersion, player1Id, player2Id, turn, phase, activePlayerIndex,
   players: [{ index, name, life, hasPriority, hasLost, handSize, librarySize, hand, battlefield, graveyard, mana }],
   stack, pendingChoice: { requestId, type, prompt, cancellable, minCount, maxCount, options: [{ label, value, cardId? }] },
   gameOver, status, winnerName, winnerId, winCondition }`. Each player's `hand` is an array; your own contains
@@ -118,7 +120,11 @@ invalid token), **404** (unknown match or path), **409** (lobby no longer open),
   identical cards are two distinct options.
 - Act: send to `/app/match/{matchId}/action`:
   `{ "actionType": "CHOICE", "payload": { "requestId": 12, "selectedIndices": [0] } }`.
-  Each request ID is single-use; duplicate and late answers are ignored rather than applied to a later prompt.
+  The engine acknowledges the choice on the sender's seat topic. A duplicate delivery of the last accepted
+  request is acknowledged without enqueuing the move twice; stale or invalid requests are rejected. If an ack
+  is lost, the client fetches the latest seat state and retries the same request ID only if that exact choice is
+  still pending. `stateVersion` increases for each engine snapshot so the client can ignore older REST responses
+  that arrive after a newer WebSocket update.
 
 ### Match lifecycle
 
@@ -135,9 +141,12 @@ invalid token), **404** (unknown match or path), **409** (lobby no longer open),
    A concede, or a disconnect longer than **60 s**, gives the opponent the win (then the row is marked `CONCEDED`).
    Either way the engine saves **Forge's text game log** to `match_logs` (oldest line first, mana taps and phase
    steps left out, at most 5,000 lines; a concede adds a closing line). The live game state itself is never stored.
-5. **Reconnect:** a disconnect starts the 60 s grace period; subscribing to the seat again cancels it. A disconnect
-   is ignored while another socket still watches the seat (a reload can open the new socket before the old one
-   closes). The web app remembers the match per tab and rejoins it after a reload.
+5. **Reconnect:** the broker's 10-second STOMP heartbeats detect silent socket loss; the client reconnects,
+   fetches the current state, and reconciles any outstanding move. A disconnect starts the 60 s grace period;
+   subscribing to the seat again cancels it. A disconnect is ignored while another socket still watches the seat
+   (a reload can open the new socket before the old one closes). The web app remembers the match per tab and
+   rejoins it after a reload. Quick Tunnels and campus networks can still have outages, and restarting the
+   battle engine loses in-memory games; heartbeats and retries cannot recover a game the process no longer has.
 
 ## Hosting
 
@@ -192,12 +201,18 @@ long-running.
 
 ### Limits and alternatives
 
-- Quick tunnels are a Cloudflare testing feature: no uptime guarantee and ~200 in-flight requests. That's fine
-  for a campus game. Each restart means a new URL (handled automatically) and drops games in progress.
-- For a permanent URL: a **named Cloudflare Tunnel** (needs a domain on Cloudflare) or **Tailscale Funnel**
-  (`https://<machine>.<tailnet>.ts.net`; the Tailscale login didn't work on the lab PC). With a fixed URL,
-  either set `VITE_BATTLE_ENGINE_URL` in `deploy-web.yml` or run
-  `update public.app_config set value = '<url>' where key = 'battle_engine_url';`, with no rebuild needed.
+- **Quick Tunnel:** simple to run, but its URL changes on restart, it has no uptime guarantee, and it is
+  limited to roughly 200 in-flight requests. The PWA discovers the new URL automatically; restarting the
+  engine still drops live games.
+- **Named Cloudflare Tunnel or Tailscale Funnel:** gives a stable URL (the former needs a Cloudflare-managed
+  domain; the latter needs a working Tailscale login). This avoids publishing a new URL after each tunnel
+  restart, but it does not keep the campus PC, network, or battle process available and does not preserve
+  in-memory games after an engine restart. For a fixed URL, set `VITE_BATTLE_ENGINE_URL` in `deploy-web.yml`
+  or update `app_config.battle_engine_url`; no rebuild is needed for the latter.
+- **More reliable engine host:** moving the process off the campus PC can improve host/network availability
+  and enable stronger process supervision. Surviving an engine restart still requires persisting match state;
+  hosting alone cannot restore an in-memory game. No option eliminates recovery from arbitrary player-side
+  network loss.
 
 ## Tests
 

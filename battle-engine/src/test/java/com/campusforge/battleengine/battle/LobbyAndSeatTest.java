@@ -105,6 +105,15 @@ class LobbyAndSeatTest {
     }
 
     @Test
+    void playerIndexIsResolvedOnlyForMatchParticipants() {
+        when(supabase.findMatch(matchId)).thenReturn(Optional.of(match("ACTIVE", joiner, Instant.now())));
+
+        assertEquals(0, manager.playerIndex(matchId, host));
+        assertEquals(1, manager.playerIndex(matchId, joiner));
+        assertEquals(-1, manager.playerIndex(matchId, stranger));
+    }
+
+    @Test
     void subscribeIsRefusedForSomeoneElsesSeat() {
         MatchSeatAccess access = mock(MatchSeatAccess.class);
         when(access.canWatchSeat(matchId, 0, host)).thenReturn(true);

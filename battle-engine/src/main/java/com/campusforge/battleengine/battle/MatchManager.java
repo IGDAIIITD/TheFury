@@ -296,29 +296,43 @@ public class MatchManager implements MatchSeatAccess {
         return featureFlags.isAiBattlesEnabled();
     }
 
-    public void handleAction(UUID matchId, UUID playerId, String actionType, Object payload) {
+    public boolean handleAction(UUID matchId, UUID playerId, String actionType, Object payload) {
         ForgeMatchSession session = activeMatches.get(matchId);
-        if (session == null) {
-            return;
+        if (session == null || !"CHOICE".equals(actionType) || !(payload instanceof Map<?, ?> map)) {
+            return false;
         }
-        session.onPlayerActivity(playerId);
-        if ("CHOICE".equals(actionType) && payload instanceof Map<?, ?> map) {
-            Object requestId = map.get("requestId");
-            Object indices = map.get("selectedIndices");
-            if (requestId instanceof Number number && indices instanceof List<?> list) {
-                List<Integer> selected = new ArrayList<>();
-                for (Object o : list) {
-                    if (o instanceof Number n) {
-                        selected.add(n.intValue());
-                    }
-                }
-                boolean accepted = session.submitChoice(playerId, number.longValue(), selected);
-                if (!accepted) {
-                    log.debug("Rejected choice for match {} player {} (stale request {})",
-                            matchId, playerId, number.longValue());
-                }
+        Object requestId = map.get("requestId");
+        Object indices = map.get("selectedIndices");
+        if (!(requestId instanceof Number number) || !(indices instanceof List<?> list)) {
+            return false;
+        }
+        List<Integer> selected = new ArrayList<>();
+        for (Object o : list) {
+            if (o instanceof Number n) {
+                selected.add(n.intValue());
             }
         }
+        long id = number.longValue();
+        boolean accepted = session.hasAcceptedChoice(playerId, id)
+                || session.submitChoice(playerId, id, selected);
+        if (accepted) {
+            session.onPlayerActivity(playerId);
+        } else {
+            log.debug("Rejected choice for match {} player {} (stale request {})", matchId, playerId, id);
+        }
+        return accepted;
+    }
+
+    /** Returns the authenticated player's seat, or -1 when they are not in the match. */
+    public int playerIndex(UUID matchId, UUID playerId) {
+        ForgeMatchSession session = activeMatches.get(matchId);
+        if (session != null) {
+            return session.getPlayerIndex(playerId);
+        }
+        return supabase.findMatch(matchId)
+                .map(match -> match.player1Id().equals(playerId) ? 0
+                        : playerId.equals(match.player2Id()) ? 1 : -1)
+                .orElse(-1);
     }
 
     // ------------------------------------------------------------------

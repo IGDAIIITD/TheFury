@@ -33,6 +33,8 @@ import {
   isAutoPass,
   shouldSendAutoPass,
   hasCompleteLiveBoard,
+  isStaleMatchState,
+  choiceRecoveryAction,
 } from './battleUi'
 import type { BattleInstruction, MatchZone, OptionMatch } from './battleUi'
 
@@ -41,6 +43,16 @@ interface GameEvent {
   text: string
   kind: 'life' | 'zone' | 'phase' | 'turn' | 'system'
 }
+
+interface PendingBattleAction {
+  matchId: string
+  requestId: number
+  selectedIndices: number[]
+  acknowledged: boolean
+  attempts: number
+}
+
+type BattleConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting'
 
 function LifePill({ delta }: { delta: number }) {
   const color = delta < 0 ? 'var(--bad)' : 'var(--good)'
@@ -249,6 +261,7 @@ export default function BattlePage() {
   const throttleTimer = useRef<number | null>(null)
   const autoPassedRef = useRef<number | null>(null)
   const stateSyncSeq = useRef(0)
+  const latestStateRef = useRef<MatchState | null>(null)
   const [decks, setDecks] = useState<DeckDto[]>([])
   const [selectedDeckId, setSelectedDeckId] = useState('')
   const [joinCode, setJoinCode] = useState('')
@@ -259,8 +272,11 @@ export default function BattlePage() {
   const [notice, setNotice] = useState('')
   const [stateLoading, setStateLoading] = useState(false)
   const [stateLoadError, setStateLoadError] = useState('')
+  const [connectionStatus, setConnectionStatus] = useState<BattleConnectionStatus>('disconnected')
+  const [pendingAction, setPendingAction] = useState<PendingBattleAction | null>(null)
   const [aiEnabled, setAiEnabled] = useState(false)
   const clientRef = useRef<Client | null>(null)
+  const pendingActionRef = useRef<PendingBattleAction | null>(null)
 
   const [events, setEvents] = useState<GameEvent[]>([])
   const [lifeDeltas, setLifeDeltas] = useState<Record<number, { delta: number }>>({})
@@ -330,6 +346,13 @@ export default function BattlePage() {
    * into the newest one per STATE_THROTTLE_MS. Game over always renders immediately.
    */
   const applyState = useCallback((next: MatchState) => {
+    if (isStaleMatchState(next, latestStateRef.current)) return
+    latestStateRef.current = next
+    const submitted = pendingActionRef.current
+    if (submitted?.matchId === next.matchId && next.pendingChoice?.requestId !== submitted.requestId) {
+      pendingActionRef.current = null
+      setPendingAction(null)
+    }
     if (next.gameOver) {
       if (throttleTimer.current !== null) window.clearTimeout(throttleTimer.current)
       throttleTimer.current = null
@@ -392,23 +415,57 @@ export default function BattlePage() {
     let cancelled = false
     let stompClient: Client | null = null
 
+    setConnectionStatus('connecting')
     void syncMatchState(activeMatch.id)
 
     battleToken().then((wsToken) => {
       if (cancelled) return
-      if (!wsToken) return
+      if (!wsToken) {
+        setConnectionStatus('reconnecting')
+        setStateLoadError('Sign in again to reconnect to this battle.')
+        return
+      }
 
       const client = new Client({
         // native WebSocket (ws:// or wss://); the engine's plain STOMP endpoint
         brokerURL: battleWsUrl(),
         connectHeaders: { Authorization: `Bearer ${wsToken}` },
         reconnectDelay: 5000,
+        heartbeatIncoming: 10_000,
+        heartbeatOutgoing: 10_000,
+        heartbeatToleranceMultiplier: 2,
         onConnect: () => {
+          if (cancelled) return
+          setConnectionStatus('connected')
           autoPassedRef.current = null
           client.subscribe(`/topic/match/${activeMatch.id}/p${myIndex}`, (msg) => {
-            const parsed = JSON.parse(msg.body)
+            const parsed = JSON.parse(msg.body) as MatchState & {
+              type?: string
+              message?: unknown
+              requestId?: unknown
+              accepted?: unknown
+            }
             if (parsed.type === 'info') {
-              setInfo(parsed.message as string)
+              if (typeof parsed.message === 'string') setInfo(parsed.message)
+              return
+            }
+            if (parsed.type === 'action-ack') {
+              const requestId = parsed.requestId
+              setPendingAction((current) => {
+                if (!current || current.matchId !== activeMatch.id || current.requestId !== requestId) return current
+                if (parsed.accepted === false) {
+                  pendingActionRef.current = null
+                  return null
+                }
+                const next = { ...current, acknowledged: parsed.accepted === true }
+                pendingActionRef.current = next
+                return next
+              })
+              if (parsed.accepted === false) {
+                autoPassedRef.current = null
+                setNotice('The server did not accept that move. Syncing the battle state…')
+                void syncMatchState(activeMatch.id)
+              }
               return
             }
             applyState(parsed)
@@ -422,10 +479,34 @@ export default function BattlePage() {
           // decision that was requested while this tab was away.
           void syncMatchState(activeMatch.id)
         },
+        onWebSocketClose: () => {
+          if (cancelled) return
+          setConnectionStatus('reconnecting')
+          void syncMatchState(activeMatch.id)
+        },
+        onWebSocketError: () => {
+          if (cancelled) return
+          setConnectionStatus('reconnecting')
+        },
+        onHeartbeatLost: () => {
+          if (cancelled) return
+          setConnectionStatus('reconnecting')
+          setInfo('Battle connection lost; reconnecting and restoring the current move…')
+        },
+        onStompError: (frame) => {
+          if (cancelled) return
+          setConnectionStatus('reconnecting')
+          const message = frame.headers.message
+          if (message) setStateLoadError(`Battle connection error: ${message}`)
+        },
       })
       stompClient = client
       clientRef.current = client
       client.activate()
+    }).catch((err: unknown) => {
+      if (cancelled) return
+      setConnectionStatus('reconnecting')
+      setStateLoadError(err instanceof Error ? err.message : 'Could not authenticate the battle connection.')
     })
 
     return () => {
@@ -433,6 +514,7 @@ export default function BattlePage() {
       stateSyncSeq.current++
       stompClient?.deactivate()
       clientRef.current = null
+      setConnectionStatus('disconnected')
     }
   }, [activeMatch, player, myIndex, applyState, refreshHistory, syncMatchState])
 
@@ -591,6 +673,17 @@ export default function BattlePage() {
       if (reportFailure) setNotice('Reconnecting to the battle server. Your move was not sent; try again when connected.')
       return false
     }
+    const pending = pendingActionRef.current
+    if (pending) {
+      if (pending.matchId === activeMatch.id && pending.requestId === requestId) {
+        const sameSelection =
+          pending.selectedIndices.length === indices.length &&
+          pending.selectedIndices.every((index, i) => index === indices[i])
+        if (sameSelection) return true
+      }
+      if (reportFailure) setNotice('Your previous move is still syncing. Please wait a moment.')
+      return false
+    }
     try {
       client.publish({
         destination: `/app/match/${activeMatch.id}/action`,
@@ -599,6 +692,15 @@ export default function BattlePage() {
           payload: { requestId, selectedIndices: indices },
         }),
       })
+      const submitted: PendingBattleAction = {
+        matchId: activeMatch.id,
+        requestId,
+        selectedIndices: indices,
+        acknowledged: false,
+        attempts: 0,
+      }
+      pendingActionRef.current = submitted
+      setPendingAction(submitted)
       return true
     } catch (err) {
       if (reportFailure) {
@@ -607,6 +709,71 @@ export default function BattlePage() {
       return false
     }
   }
+
+  useEffect(() => {
+    if (!pendingAction || !activeMatch || pendingAction.matchId !== activeMatch.id) return
+
+    const delay = Math.min(5_000 * (pendingAction.attempts + 1), 15_000)
+    const timer = window.setTimeout(async () => {
+      const current = pendingActionRef.current
+      if (!current || current.matchId !== activeMatch.id || current.requestId !== pendingAction.requestId) return
+
+      try {
+        const state = await getMatchState(activeMatch.id)
+        if (isStaleMatchState(state, latestStateRef.current)) {
+          setPendingAction((previous) => {
+            if (!previous || previous.requestId !== current.requestId) return previous
+            const next = { ...previous, attempts: previous.attempts + 1 }
+            pendingActionRef.current = next
+            return next
+          })
+          return
+        }
+        const latest = pendingActionRef.current
+        if (!latest || latest.matchId !== activeMatch.id || latest.requestId !== current.requestId) return
+        applyState(state)
+        const currentAction = pendingActionRef.current
+        if (!currentAction || currentAction.matchId !== activeMatch.id || currentAction.requestId !== current.requestId) return
+        const client = clientRef.current
+        const attempts = currentAction.attempts + 1
+        const recovery = choiceRecoveryAction(currentAction, state, !!client?.connected)
+        if (recovery === 'resolved') return
+        if (recovery === 'retry' && client?.connected) {
+          client.publish({
+            destination: `/app/match/${activeMatch.id}/action`,
+            body: JSON.stringify({
+              actionType: 'CHOICE',
+              payload: { requestId: currentAction.requestId, selectedIndices: currentAction.selectedIndices },
+            }),
+          })
+        } else if (client && !client.active) {
+          client.activate()
+        }
+        if (attempts > 3) {
+          setNotice(currentAction.acknowledged
+            ? 'Move received; waiting for the battle state to update.'
+            : 'Still reconnecting this move. The battle will keep syncing automatically.')
+        }
+        setPendingAction((previous) => {
+          if (!previous || previous.requestId !== currentAction.requestId) return previous
+          const next = { ...previous, attempts }
+          pendingActionRef.current = next
+          return next
+        })
+      } catch {
+        const client = clientRef.current
+        if (client && !client.active) client.activate()
+        setPendingAction((previous) => {
+          if (!previous || previous.requestId !== current.requestId) return previous
+          const next = { ...previous, attempts: previous.attempts + 1 }
+          pendingActionRef.current = next
+          return next
+        })
+      }
+    }, delay)
+
+    return () => window.clearTimeout(timer)
+  }, [pendingAction, activeMatch, applyState])
 
   const retryBattleState = () => {
     if (!activeMatch) return
@@ -923,6 +1090,11 @@ export default function BattlePage() {
           <div className="filters" style={{ flexWrap: 'wrap' }}>
             <span className="chip">Turn {state.turn}</span>
             <span className="chip">{friendlyPhase(state.phase)}</span>
+            {connectionStatus !== 'connected' && (
+              <span className="chip" role="status">
+                {connectionStatus === 'connecting' ? 'Connecting…' : 'Reconnecting…'}
+              </span>
+            )}
             <span
               className="chip"
               style={{

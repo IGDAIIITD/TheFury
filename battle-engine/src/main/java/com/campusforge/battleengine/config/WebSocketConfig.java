@@ -1,9 +1,13 @@
 package com.campusforge.battleengine.config;
 
 import com.campusforge.battleengine.security.SupabaseStompAuthChannelInterceptor;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.messaging.simp.config.ChannelRegistration;
 import org.springframework.messaging.simp.config.MessageBrokerRegistry;
+import org.springframework.messaging.simp.config.SimpleBrokerRegistration;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
 import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
 import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
@@ -18,15 +22,31 @@ import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerCo
 @EnableWebSocketMessageBroker
 public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
-    private final SupabaseStompAuthChannelInterceptor supabaseStompAuthChannelInterceptor;
+    private static final long HEARTBEAT_INTERVAL_MS = 10_000;
 
-    public WebSocketConfig(SupabaseStompAuthChannelInterceptor supabaseStompAuthChannelInterceptor) {
+    private final SupabaseStompAuthChannelInterceptor supabaseStompAuthChannelInterceptor;
+    private final ThreadPoolTaskScheduler heartbeatScheduler;
+
+    public WebSocketConfig(
+            SupabaseStompAuthChannelInterceptor supabaseStompAuthChannelInterceptor,
+            @Qualifier("battleHeartbeatScheduler") ThreadPoolTaskScheduler heartbeatScheduler) {
         this.supabaseStompAuthChannelInterceptor = supabaseStompAuthChannelInterceptor;
+        this.heartbeatScheduler = heartbeatScheduler;
+    }
+
+    @Bean
+    public static ThreadPoolTaskScheduler battleHeartbeatScheduler() {
+        ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
+        scheduler.setPoolSize(1);
+        scheduler.setThreadNamePrefix("battle-stomp-heartbeat-");
+        return scheduler;
     }
 
     @Override
     public void configureMessageBroker(MessageBrokerRegistry config) {
-        config.enableSimpleBroker("/topic");
+        SimpleBrokerRegistration broker = config.enableSimpleBroker("/topic");
+        broker.setHeartbeatValue(new long[] {HEARTBEAT_INTERVAL_MS, HEARTBEAT_INTERVAL_MS});
+        broker.setTaskScheduler(heartbeatScheduler);
         config.setApplicationDestinationPrefixes("/app");
     }
 
