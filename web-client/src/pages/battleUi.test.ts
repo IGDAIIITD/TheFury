@@ -10,6 +10,7 @@ import {
   interactiveZones,
   isImmediateChoice,
   primaryActionLabel,
+  isAutoPass,
   manaSourceColors,
   manaCostSymbols,
   availableMana,
@@ -230,7 +231,7 @@ describe('matchOptionsToCards', () => {
     expect(matches[2]).toMatchObject({ optionIndex: 2, zone: 'none', cardIds: [] })
   })
 
-  it('filters instant spells to none outside combat', () => {
+  it('keeps instant spells actionable outside combat', () => {
     const instantPools = {
       hand: [
         card(30, 'Giant Growth', { type: 'Instant' }),
@@ -249,7 +250,7 @@ describe('matchOptionsToCards', () => {
     const matches = matchOptionsToCards(c, instantPools, 'MAIN1')
     const giantGrowth = matches.find((m) => m.label.includes('Giant Growth'))
     const grizzly = matches.find((m) => m.label.includes('Grizzly Bears'))
-    expect(giantGrowth?.zone).toBe('none')
+    expect(giantGrowth?.zone).toBe('hand')
     expect(grizzly?.zone).toBe('hand')
   })
 
@@ -309,6 +310,11 @@ describe('isImmediateChoice / primaryActionLabel', () => {
 })
 
 describe('automatic pass and live board recovery', () => {
+  it('does not auto-pass an unmapped spell or ability option', () => {
+    const pending = choice({ requestId: 9, type: 'play', options: [{ label: 'Mystery spell', value: '0' }] })
+    expect(isAutoPass(pending, [{ optionIndex: 0, label: 'Mystery spell', zone: 'none', cardIds: [] }])).toBe(false)
+  })
+
   it('does not consume an automatic pass until the socket is connected', () => {
     const pending = choice({ requestId: 8, type: 'play' })
     expect(shouldSendAutoPass(pending, [], false, null)).toBe(false)

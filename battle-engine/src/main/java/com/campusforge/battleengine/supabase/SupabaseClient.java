@@ -334,10 +334,18 @@ public class SupabaseClient {
 
     /** Records the terminal state via the service-role RPC (XP + feed + status). */
     public void recordMatchResult(UUID matchId, UUID winnerId, String winCondition) {
+        recordMatchResult(matchId, winnerId, winCondition, null, false);
+    }
+
+    /** Records a concession, optionally as an early forfeiture with no XP. */
+    public void recordMatchResult(UUID matchId, UUID winnerId, String winCondition,
+                                  UUID forfeiter, boolean earlyForfeit) {
         Map<String, Object> body = new HashMap<>();
         body.put("p_match", matchId.toString());
         body.put("p_winner", winnerId != null ? winnerId.toString() : null);
         body.put("p_win_cond", winCondition);
+        body.put("p_forfeiter", forfeiter != null ? forfeiter.toString() : null);
+        body.put("p_early", earlyForfeit);
         try {
             HttpResponse<byte[]> res = rpc("record_match_result", body);
             if (res.statusCode() >= 200 && res.statusCode() < 300) {

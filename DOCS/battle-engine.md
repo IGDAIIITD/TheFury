@@ -139,6 +139,8 @@ invalid token), **404** (unknown match or path), **409** (lobby no longer open),
 3. **Play:** Forge runs on its own thread; each seat gets its own view of the state.
 4. **End:** game over → `record_match_result` (winner +50 XP × event bonus, `game_log` rows for both players).
    A concede, or a disconnect longer than **60 s**, gives the opponent the win (then the row is marked `CONCEDED`).
+   A concession before five completed turns is recorded as `EARLY_FORFEIT`: both players receive 0 XP and the
+   forfeiting player has a database-enforced 10-minute battle cooldown.
    Either way the engine saves **Forge's text game log** to `match_logs` (oldest line first, mana taps and phase
    steps left out, at most 5,000 lines; a concede adds a closing line). The live game state itself is never stored.
 5. **Reconnect:** the broker's 10-second STOMP heartbeats detect silent socket loss; the client reconnects,

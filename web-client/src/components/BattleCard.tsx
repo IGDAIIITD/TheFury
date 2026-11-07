@@ -105,6 +105,7 @@ export default function BattleCard({
           return
         }
         if (interactive) onClick?.()
+        else onInspect?.()
       }}
       onContextMenu={(e) => {
         if (!onInspect) return

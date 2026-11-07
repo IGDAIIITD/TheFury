@@ -194,6 +194,15 @@ public class ForgeMatchSession implements Consumer<Map<String, Object>> {
         return headless.isFinished();
     }
 
+    /** Completed Forge turns, used to classify very early concessions. */
+    public int getCompletedTurns() {
+        try {
+            return Math.max(0, headless.getGame().getView().getTurn() - 1);
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
     /** Maps the winner lobby name to the player id (or null for the bot). */
     public UUID getWinnerPlayerId() {
         Map<String, Object> state = latestState;

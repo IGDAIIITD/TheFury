@@ -96,6 +96,9 @@ The deck builder checks decks with `validate_deck_spec` when saving. The battle 
 - **Winning** awards 50 XP × the event bonus (if the match belongs to an active event), records the result and
   writes history for both players.
 - **Concede** gives the opponent the win. **Disconnecting** for more than 60 seconds counts as a concede.
+  A concession before five completed turns is an **early match forfeit**: it gives both players 0 XP and applies
+  a 10-minute cooldown to the forfeiting player. It is shown as `FORFEIT` in personal match history and does not
+  count as a leaderboard win.
 - Pressing Join again after a successful join just reopens the running match. A lobby can only be joined once.
 - The engine keeps live games in memory: if it restarts, games in progress are lost (no XP is awarded for them).
 - "vs AI" matches exist but are disabled by default (`BATTLE_AI_BATTLES_ENABLED`).

@@ -337,8 +337,29 @@ console.log('\n# battle-engine RPCs (service role)')
   check('match result awards 50 XP', r.ok && Number(xpAfter) - Number(xpBefore) === 50, r.error)
   const ml = await q(`select detail->>'result' as res from public.game_log where kind = 'MATCH' and ref_id = $1 order by res`, [matchId])
   check('match logged for both players', ml.map((x) => x.res).join() === 'LOSS,WIN', JSON.stringify(ml))
+
+  const earlyMatch = crypto.randomUUID()
+  await q(`insert into public.matches (id, player1_id, player2_id, deck1_id, deck2_id, status) values ($1, $2, $3, $4, $5, 'ACTIVE')`, [earlyMatch, alice, bob, aliceDeck, bobDeck])
+  const earlyAliceBefore = (await q(`select experience from public.profiles where id = $1`, [alice]))[0].experience
+  const earlyBobBefore = (await q(`select experience from public.profiles where id = $1`, [bob]))[0].experience
+  r = await as(db, 'service_role', null, `select public.record_match_result($1, $2, 'Conceded', $3, true)`, [earlyMatch, bob, alice])
+  const earlyAfter = await q(`select status, early_forfeit, win_condition from public.matches where id = $1`, [earlyMatch])
+  const earlyAliceAfter = (await q(`select experience from public.profiles where id = $1`, [alice]))[0].experience
+  const earlyBobAfter = (await q(`select experience from public.profiles where id = $1`, [bob]))[0].experience
+  check('early concession is recorded as a forfeit with no XP for either player', r.ok && earlyAfter[0].early_forfeit === true && earlyAfter[0].win_condition === 'EARLY_FORFEIT'
+    && Number(earlyAliceAfter) === Number(earlyAliceBefore) && Number(earlyBobAfter) === Number(earlyBobBefore), JSON.stringify([r.error, earlyAfter]))
+  r = await as(db, 'authenticated', alice, `select result, xp from public.my_match_history(50) where match_id = $1`, [earlyMatch])
+  check('early forfeits appear as FORFEIT with zero XP', r.ok && r.rows[0]?.result === 'FORFEIT' && Number(r.rows[0].xp) === 0, JSON.stringify(r.rows ?? r.error))
+  r = await as(db, 'authenticated', admin, `select public.leaderboard_full('winrate', null, null, null, 50) as value`)
+  const leaderboard = r.rows?.[0]?.value
+  const bobRow = leaderboard?.rows?.find((row) => row.displayName === 'Bob')
+  check('early forfeits do not count as leaderboard wins', r.ok && bobRow?.value === 1, JSON.stringify(leaderboard ?? r.error))
+  r = await as(db, 'service_role', null, `insert into public.matches (id, player1_id, deck1_id, status) values ($1, $2, $3, 'ACTIVE')`, [crypto.randomUUID(), alice, aliceDeck])
+  check('early forfeiter cooldown blocks a new match', !r.ok && r.code === 'CF429', r.error)
+  await q(`update public.profiles set battle_cooldown_until = null where id = $1`, [alice])
+
   r = await as(db, 'authenticated', alice, `select * from public.popular_decks(10)`)
-  check('popular_decks aggregates across all players (definer)', r.ok && r.rows.length === 1 && Number(r.rows[0].play_count) === 2, JSON.stringify(r.rows))
+  check('popular_decks aggregates across all players (definer)', r.ok && r.rows.length === 1 && Number(r.rows[0].play_count) === 4, JSON.stringify(r.rows))
 
   // open-battle feed, campus history, personal history (migration 20)
   const fresh = crypto.randomUUID()
@@ -356,7 +377,7 @@ console.log('\n# battle-engine RPCs (service role)')
   check('open_lobbies marks your own lobby', r.ok && r.rows[0]?.mine === true, JSON.stringify(r.rows ?? r.error))
 
   r = await as(db, 'authenticated', admin, `select winner_name, loser_name from public.recent_battles(10)`)
-  check('recent_battles: anyone signed in sees who beat whom', r.ok && r.rows.length === 1 && r.rows[0].winner_name === 'Bob' && r.rows[0].loser_name.startsWith('Alice'), JSON.stringify(r.rows ?? r.error))
+  check('recent_battles: anyone signed in sees who beat whom', r.ok && r.rows.some((row) => row.winner_name === 'Bob' && row.loser_name.startsWith('Alice')), JSON.stringify(r.rows ?? r.error))
   const botMatch = crypto.randomUUID()
   await q(`insert into public.matches (id, player1_id, deck1_id, status, winner_id, ended_at) values ($1, $2, $3, 'FINISHED', null, now())`, [botMatch, alice, aliceDeck])
   r = await as(db, 'authenticated', admin, `select winner_name, loser_name from public.recent_battles(1)`)
@@ -365,7 +386,7 @@ console.log('\n# battle-engine RPCs (service role)')
   r = await as(db, 'authenticated', bob, `select match_id, result, xp from public.my_match_history(10)`)
   const bobHist = r.rows ?? []
   check('my_match_history: winner sees WON +50 XP', r.ok && bobHist.some((x) => x.match_id === matchId && x.result === 'WON' && Number(x.xp) === 50), JSON.stringify(bobHist))
-  check('my_match_history: only your own matches', bobHist.every((x) => x.match_id === matchId), JSON.stringify(bobHist))
+  check('my_match_history: only your own matches', bobHist.every((x) => x.match_id === matchId || x.match_id === earlyMatch), JSON.stringify(bobHist))
   r = await as(db, 'authenticated', alice, `select match_id, result, xp from public.my_match_history(20)`)
   const byId = Object.fromEntries((r.rows ?? []).map((x) => [x.match_id, x]))
   check('my_match_history: loser sees LOST +0 XP', byId[matchId]?.result === 'LOST' && Number(byId[matchId]?.xp) === 0, JSON.stringify(byId[matchId]))

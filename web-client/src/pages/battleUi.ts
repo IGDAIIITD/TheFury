@@ -456,10 +456,8 @@ function zoneOf(
 export function matchOptionsToCards(
   choice: PendingChoice,
   pools: { hand: CardEntry[]; battlefield: CardEntry[]; opponent: CardEntry[] },
-  phase?: string | null,
+  _phase?: string | null,
 ): OptionMatch[] {
-  const inCombat = isInCombatPhase(phase)
-  const allCards = [...pools.hand, ...pools.battlefield]
   const claimed = new Set<string>()
   return choice.options.map((opt, i) => {
     let m: OptionMatch
@@ -480,12 +478,6 @@ export function matchOptionsToCards(
       }
     }
     for (const id of m.cardIds) claimed.add(`${m.zone}:${id}`)
-    if (choice.type === 'play' && !inCombat && m.cardIds.length > 0) {
-      const card = allCards.find((c) => m.cardIds.includes(c.id))
-      if (card?.type?.toLowerCase() === 'instant') {
-        return { ...m, optionIndex: i, zone: 'none' as const }
-      }
-    }
     return { ...m, optionIndex: i }
   })
 }
@@ -495,7 +487,9 @@ export function matchOptionsToCards(
  * it automatically, and the board treats it as "waiting" so it doesn't flash a prompt.
  */
 export function isAutoPass(choice: PendingChoice | null | undefined, matches: OptionMatch[]): boolean {
-  return !!choice && choice.type === 'play' && !matches.some((m) => m.zone !== 'none' && !m.manaAbility)
+  // An unmapped option is still a real engine decision. Treating it as an
+  // automatic pass can make both Forge controllers wait forever for priority.
+  return !!choice && choice.type === 'play' && matches.every((m) => m.manaAbility === true)
 }
 
 export function shouldSendAutoPass(

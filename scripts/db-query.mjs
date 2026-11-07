@@ -21,7 +21,9 @@ try {
   }
 } catch { /* no .env */ }
 
-const { SUPABASE_URL, SUPABASE_ACCESS_TOKEN } = env
+const { SUPABASE_URL: processUrl, SUPABASE_ACCESS_TOKEN: processToken } = process.env
+const SUPABASE_URL = env.SUPABASE_URL || processUrl
+const SUPABASE_ACCESS_TOKEN = env.SUPABASE_ACCESS_TOKEN || processToken
 if (!SUPABASE_URL || !SUPABASE_ACCESS_TOKEN) {
   console.error('need SUPABASE_URL and SUPABASE_ACCESS_TOKEN in the root .env')
   process.exit(1)

@@ -39,6 +39,8 @@ public class MatchManager implements MatchSeatAccess {
 
     private static final Logger log = LoggerFactory.getLogger(MatchManager.class);
     private static final long DISCONNECT_GRACE_SECONDS = 60;
+    /** Fewer than five completed turns is an early forfeit. */
+    private static final int EARLY_FORFEIT_COMPLETED_TURNS = 5;
     /** A lobby nobody joins within this time is closed (EXPIRED). The web client shows the same countdown. */
     static final long LOBBY_TTL_SECONDS = 120;
     private static final String CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
@@ -257,6 +259,8 @@ public class MatchManager implements MatchSeatAccess {
     }
 
     public void reportConcede(UUID matchId, UUID playerId) {
+        ForgeMatchSession session = activeMatches.get(matchId);
+        boolean earlyForfeit = session != null && session.getCompletedTurns() < EARLY_FORFEIT_COMPLETED_TURNS;
         SupabaseMatch match = supabase.findMatch(matchId).orElse(null);
         UUID winnerId = null;
         if (match != null) {
@@ -264,12 +268,12 @@ public class MatchManager implements MatchSeatAccess {
                     ? (match.player2Id() != null ? match.player2Id() : null)
                     : match.player1Id();
         }
-        // Two-step: award via the RPC (idempotent), then flip status to CONCEDED.
-        // record_match_result only awards once, so the row must not be CONCEDED yet.
-        supabase.recordMatchResult(matchId, winnerId, "Conceded");
-        supabase.markConceded(matchId, winnerId, "Conceded");
+        // Two-step: record rewards/forfeit state via the RPC, then flip status to
+        // CONCEDED. The RPC is idempotent and must run before the status change.
+        supabase.recordMatchResult(matchId, winnerId, "Conceded", playerId, earlyForfeit);
+        supabase.markConceded(matchId, winnerId, earlyForfeit ? "EARLY_FORFEIT" : "Conceded");
 
-        ForgeMatchSession session = activeMatches.remove(matchId);
+        session = activeMatches.remove(matchId);
         if (session != null) {
             saveLog(matchId, session, supabase.displayName(playerId).orElse("A player") + " conceded.");
             String winnerName = winnerId != null ? supabase.displayName(winnerId).orElse(null) : null;
@@ -278,7 +282,7 @@ public class MatchManager implements MatchSeatAccess {
             terminal.put("status", "CONCEDED");
             terminal.put("winnerId", winnerId != null ? winnerId.toString() : null);
             terminal.put("winnerName", winnerName);
-            terminal.put("winCondition", "Conceded");
+            terminal.put("winCondition", earlyForfeit ? "EARLY_FORFEIT" : "Conceded");
             terminal.put("matchId", matchId.toString());
             messaging.convertAndSend("/topic/match/" + matchId + "/p0", terminal);
             messaging.convertAndSend("/topic/match/" + matchId + "/p1", terminal);

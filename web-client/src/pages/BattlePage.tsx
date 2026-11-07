@@ -19,6 +19,7 @@ import { formatCountdown, remainingMs, timeAgo } from '../lib/time'
 import type { DeckDto } from '../api/types'
 import BattleCard from '../components/BattleCard'
 import MatchLogButton from '../components/MatchLogButton'
+import LiveBattleFeed from '../components/LiveBattleFeed'
 import { HealthBar, ManaPanel, PhaseStrip } from '../components/BattleHud'
 import { scryfallArtUrl } from '../lib/scryfall'
 import { mockMatch, mockState } from './battleFixture'
@@ -29,7 +30,6 @@ import {
   interactiveZones,
   isImmediateChoice,
   primaryActionLabel,
-  isInCombatPhase,
   isAutoPass,
   shouldSendAutoPass,
   hasCompleteLiveBoard,
@@ -227,6 +227,7 @@ const RESULT_LABEL: Record<MatchResult, string> = {
   WON: 'Won',
   LOST: 'Lost',
   DRAW: 'Draw',
+  FORFEIT: 'Match forfeit',
   ACTIVE: 'In progress',
   WAITING: 'Waiting',
   EXPIRED: 'Expired',
@@ -941,6 +942,7 @@ export default function BattlePage() {
               Close lobby
             </button>
           </div>
+          <LiveBattleFeed />
         </div>
       )
     }
@@ -1067,16 +1069,9 @@ export default function BattlePage() {
       )
     }
 
-    const inCombat = isInCombatPhase(state.phase)
-    const allCards = [...(me?.hand ?? []), ...(me?.battlefield ?? [])]
-    const textOptions = matches.filter((m) => {
-      if (m.zone !== 'none') return false
-      if (!inCombat && m.cardIds.length > 0) {
-        const card = allCards.find((c) => m.cardIds.includes(c.id))
-        if (card?.type?.toLowerCase() === 'instant') return false
-      }
-      return true
-    })
+    // Keep unmapped engine choices visible as buttons. They may represent a
+    // spell/ability whose card is not present in the current serialized zone.
+    const textOptions = matches.filter((m) => m.zone === 'none')
     const hasCardOptions = matches.some((m) => m.zone !== 'none')
     const canConfirm = selected.size >= (choice?.minCount ?? 0)
 
@@ -1351,12 +1346,14 @@ export default function BattlePage() {
               </button>
             )}
             <p className="meta battle-setup-note">
-              A new lobby shows up on the Events page, where anyone can join it with one tap. It closes after 2
+              A new lobby appears in Live events below, where anyone can join it with one tap. It closes after 2
               minutes if nobody does.
             </p>
           </>
         )}
       </div>
+
+      <LiveBattleFeed />
 
       <div className="panel">
         <h3>Match History</h3>

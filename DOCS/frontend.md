@@ -11,9 +11,9 @@ origins.
 | `/login` | roster id + first name → password, optional nickname on first sign-in (see [Sign-in](#sign-in)) | `student-auth` Edge Function, Supabase Auth |
 | `/collection` | catalog + owned cards, filters, favorites, discovery counts. Every tile says how the card is obtained (`lib/ownership.ts`: "Missing · scan once, unlock forever" / "scan to collect (up to 4)" / "one of a kind, first scan wins"). Opens on **Owned**, shows the first 25 matches with a **See all** button | tables (own rows) |
 | `/collection/trades` | offer / accept / decline / cancel trades; live via Realtime | trade RPCs |
-| `/collection/events` | **Open battles** (lobbies waiting for an opponent, refreshed every 5 s; **Join** opens `/battle?join=CODE`) + **battle history** (who beat whom) | `open_lobbies()`, `recent_battles()` |
+| `/collection/events` | **Battle history** (who beat whom) | `recent_battles()` |
 | `/decks` | deck builder with server-side validation | `decks`, `deck_cards`, `validate_deck_spec` |
-| `/battle` | deck + join-by-code + create lobby, 2-minute lobby countdown, match history (result, XP, time, **Log**: the saved text game log of a finished match), the battle board | battle engine REST + WebSocket, `my_match_history()` |
+| `/battle` | deck + join-by-code + create lobby, live open-battle feed, 2-minute lobby countdown, match history (result, XP, time, **Log**: the saved text game log of a finished match), the battle board | battle engine REST + WebSocket, `open_lobbies()`, `my_match_history()` |
 | `/scan` | camera QR scanner (jsQR, throttled, ignores non-card QR codes) + manual 12-character entry for spawned codes | `claim` Edge Function |
 | `/profile` | stats, badges, battle record | `my_profile_stats` |
 | `/leaderboard` | level / collection / win-rate rankings, filter by branch (CSE … EVE); most-played decks | `leaderboard_full`, `popular_decks` |
@@ -57,12 +57,13 @@ vertical dividers (stacked on phones); each group has its own accent, color chip
 **Battle board** (`pages/BattlePage.tsx`, logic in `pages/battleUi.ts`):
 
 - Cards show the whole printed image; live state (tapped, attacking/blocking, P/T, damage) is overlaid.
-  Lands sit in a compact row below the other permanents; the hand scrolls sideways. Long-press or right-click
-  a card to see it enlarged.
+  Lands sit in a compact row below the other permanents; the hand scrolls sideways. Clicking a non-actionable
+  card, long-pressing, or right-clicking a card opens the enlarged inspection view.
 - Cards on the board carry a **cost overlay**: a grey circle for generic mana and one colored dot per colored pip
   (`manaCostSymbols`).
 - Choices map onto cards by the engine's `cardId` (so two identical creatures are two separate picks); older
-  engines fall back to names, giving same-name options one card each.
+  engines fall back to names, giving same-name options one card each. Unmapped spell/ability choices remain
+  visible as text actions and are never silently auto-passed.
 - **No flicker:** the engine sends bursts of snapshots while it auto-passes steps. The client renders the first at
   once and then at most one per 150 ms (game over immediately); decisions it passes by itself (`isAutoPass`: only
   mana taps available) are shown as "waiting", and the action dock at the bottom stays mounted with a stable height.

@@ -416,7 +416,7 @@ export interface RecentBattleDto {
   endedAt: string
 }
 
-export type MatchResult = 'WON' | 'LOST' | 'DRAW' | 'ACTIVE' | 'WAITING' | 'EXPIRED' | 'CANCELLED'
+export type MatchResult = 'WON' | 'LOST' | 'DRAW' | 'FORFEIT' | 'ACTIVE' | 'WAITING' | 'EXPIRED' | 'CANCELLED'
 
 export interface MatchHistoryDto {
   matchId: string
